@@ -1,0 +1,23 @@
+[package]
+name = "irondome-sdk"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "MIT"
+repository = "https://github.com/IrondomeDev/sdks"
+homepage = "https://irondome.dev/docs/guides/rust"
+readme = "README.md"
+description = "Secure pooled IronDome API client"
+
+# Keep native HTTP dependencies out of the Fastly Wasm workspace.
+[workspace]
+
+[dependencies]
+reqwest = { version = "=0.13.4", default-features = false, features = ["rustls", "http2"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["sync", "time"] }
+httpdate = "1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

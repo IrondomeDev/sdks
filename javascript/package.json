@@ -1,0 +1,46 @@
+{
+  "name": "@irondome/sdk",
+  "version": "0.1.0",
+  "description": "Server-side IronDome API clients with reusable secure transports",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "default": "./src/index.js"
+    },
+    "./node": {
+      "types": "./src/node.d.ts",
+      "default": "./src/node.js"
+    },
+    "./deno": {
+      "types": "./src/deno.d.ts",
+      "default": "./src/deno.js"
+    }
+  },
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test test/client.test.js",
+    "typecheck": "tsc --noEmit --strict --lib ES2022,DOM --module NodeNext --moduleResolution NodeNext test/types.ts"
+  },
+  "private": true,
+  "devDependencies": {
+    "typescript": "5.8.3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/IrondomeDev/sdks.git",
+    "directory": "javascript"
+  },
+  "homepage": "https://irondome.dev/docs/guides/javascript",
+  "bugs": {
+    "url": "https://github.com/IrondomeDev/sdks/issues"
+  }
+}
