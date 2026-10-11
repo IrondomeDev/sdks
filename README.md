@@ -1,69 +1,93 @@
-# IronDome client SDKs
+# IronDome SDKs
 
-Official SDK source for [IronDome](https://irondome.dev), maintained in
-[`IrondomeDev/sdks`](https://github.com/IrondomeDev/sdks). MIT licensed.
-These packages are unreleased. See [the release plan](RELEASING.md).
+[![npm](https://img.shields.io/npm/v/%40irondome-dev%2Fsdk?label=npm&color=F76808)](https://www.npmjs.com/package/@irondome-dev/sdk)
+[![crates.io](https://img.shields.io/crates/v/irondome-sdk?label=crates.io&color=F76808)](https://crates.io/crates/irondome-sdk)
+[![MIT license](https://img.shields.io/badge/license-MIT-F76808)](LICENSE)
+[![Documentation](https://img.shields.io/badge/read-documentation-F76808)](https://irondome.dev/docs)
 
-Server-side clients for `POST /v1/check`, with explicit transport warmup through
-unauthenticated `GET /healthz`. The clients follow [the customer contract](https://irondome.dev/docs/api/check).
-They do not change the detector, authentication, policy, usage ledger, or deployment.
+Official open-source SDKs for [IronDome](https://irondome.dev), a disposable email detection API for signup forms and backend applications. Check temporary email domains and known disposable addresses, including aliases on supported email providers.
 
-| Language | Documentation | Transport |
+The free plan includes **500 checks per month**. Get an API key from the [dashboard](https://app.irondome.dev/) and follow the [quickstart](https://irondome.dev/docs/quickstart).
+
+## Install
+
+### JavaScript and TypeScript
+
+```sh
+npm install @irondome-dev/sdk@0.1.0
+```
+
+```js
+import { IronDome } from '@irondome-dev/sdk/node';
+
+// Reuse this client across requests in your server process.
+const client = new IronDome({
+  apiKey: process.env.IRONDOME_API_KEY,
+  baseUrl: 'https://free.irondome.dev',
+});
+
+const result = await client.check('person@example.com');
+console.log(result.disposable);
+```
+
+Node.js 22+ uses the `/node` entry. Use `@irondome-dev/sdk` for portable Fetch environments, including Cloudflare Workers and Supabase Edge Functions. Standalone Deno also has a dedicated `/deno` adapter. [JavaScript guide](javascript/README.md) ? [Serverless integrations](https://irondome.dev/docs/guides/edge-serverless).
+
+### Rust
+
+```sh
+cargo add irondome-sdk@0.1.0
+```
+
+An asynchronous reqwest/rustls client with a shared connection pool. [Rust guide and example](rust/README.md) ? [API documentation](https://docs.rs/irondome-sdk).
+
+### All SDKs
+
+| Language or runtime | Package status | Guide |
 | --- | --- | --- |
-| Python 3.11+ | [Python guide](python/README.md) | Owned HTTPX sync/async pool; HTTP/2 negotiation |
-| JavaScript | [JavaScript guide](javascript/README.md) | Node HTTPS agent; portable Fetch; dedicated Deno client |
-| Go 1.23+ | [Go guide](go/README.md) | Owned standard-library HTTP transport; HTTP/2 negotiation |
-| Rust | [Rust guide](rust/README.md) | Shared asynchronous reqwest/rustls client; HTTP/2 negotiation |
+| JavaScript / TypeScript | [npm: @irondome-dev/sdk](https://www.npmjs.com/package/@irondome-dev/sdk) | [Node.js, Fetch and Deno](javascript/README.md) |
+| Rust | [crates.io: irondome-sdk](https://crates.io/crates/irondome-sdk) | [Rust](rust/README.md) |
+| Python 3.11+ | Source available; PyPI publication pending | [Python](python/README.md) |
+| Go 1.23+ | Source available; versioned module release pending | [Go](go/README.md) |
 
-The JavaScript guide covers Node.js, Vercel Functions, AWS Lambda, Deno,
-Supabase Edge Functions, and Cloudflare Workers separately. Each language has its
-own folder. JavaScript runtimes share protocol validation rather than maintaining
-six divergent copies of the API contract.
+## Single and bulk email checks
 
-## Connection strategy
+JavaScript and Rust 0.1.0 support single checks, bulk requests of up to 100 emails, and optional health warmup. Bulk results preserve input order and include invalid-address errors per item.
 
-Reuse one owned client per process and immutable origin/credential configuration.
-Python async clients belong to one event loop; Rust clones share the same pool.
-Portable Fetch clients do not own sockets. In Cloudflare Workers, construct a cheap
-request-scoped client and let the platform manage its network pool.
+```js
+const batch = await client.checkBulk(['person@example.com', 'invalid']);
+for (const item of batch.results) {
+  if ('error' in item) console.log(item.index, item.error.code);
+  else console.log(item.index, item.disposable);
+}
+```
 
-Constructors perform no network I/O. Call `warmup` explicitly ahead of independent
-application work, not automatically before each check. Warmup sends no API key or
-email and is not a billable check. It can establish DNS/TCP/TLS state for reuse, but
-it does not prove authorization or warm the detector/policy code. A first-ever
-secure connection still needs a handshake. Eviction, freeze/thaw, idle expiry,
-network changes, and server closure can require another connection.
+Each syntactically valid email in a bulk request counts as one check. See the [bulk API reference](https://irondome.dev/docs/api/bulk) for limits and response details.
 
-No SDK enables TLS early data, follows redirects, installs transparent POST retries,
-or caches classification/authorization results. A timed-out POST may have succeeded
-and been billed. Do not blindly retry it. Read [the research](TESTING.md) before
-setting performance expectations or changing these policies.
+## Plans and API keys
 
-## Configuration and distribution
+| Plan | Base URL | API key |
+| --- | --- | --- |
+| Free | `https://free.irondome.dev` | Free key |
+| Pay as you go | `https://api.irondome.dev` | Paid key |
 
-Require `IRONDOME_BASE_URL` from trusted server configuration and
-`IRONDOME_API_KEY` from a secret store. Use the HTTPS origin assigned to the account;
-there is deliberately no invented production domain or default deployment host.
-Never derive either value from an unauthenticated inbound request. Keep API keys out
-of browser bundles, public environment-variable prefixes, logs, and exception locals.
+When switching plans, change **both the endpoint and API key**. Keep credentials on the server, outside browser bundles and logs. Configure keys through environment variables or your secret store. [Plans and endpoints](https://irondome.dev/docs/plans).
 
-These are source packages, not a claim that registry names are published. Install
-from this checkout using each guide. Node and Rust publication remain disabled
-until release checks and registry configuration are complete. No package is
-published and no Fastly service is deployed by SDK CI.
+## Performance and error handling
 
-The free base URL is `https://free.irondome.dev`; paid uses
-`https://api.irondome.dev`. Switching plans requires both a new key and base URL.
-Current clients support single checks and warmup. The deployed
-[bulk REST endpoint](https://irondome.dev/docs/api/bulk) still needs SDK helpers.
+Reuse clients that own connection pools. Rust clones share a pool; Python async clients belong to one event loop. Portable Fetch clients use the platform's network management; follow the runtime guide for their lifecycle.
 
-## Verification
+Optional `warmup()` sends `GET /healthz` without consuming an email check. It can prepare a connection for later reuse, but cannot guarantee the same edge instance or eliminate cold starts. Avoid adding a warmup round trip before every check.
 
-[Testing and measurement](TESTING.md) explains the local TLS fixture, exact commands,
-coverage boundaries, and production acceptance gates. The fixture generates a
-short-lived localhost certificate and explicitly trusts it; tests never disable
-certificate or hostname verification. All traffic in the test suites is local.
+SDKs do not cache classifications or automatically retry checks. A timeout may occur after the server has processed a request; handle errors separately from an allowed email result. `valid` does not establish mailbox existence or deliverability, and `not_listed` means the address was not found in the current lists.
 
-The CI workflow validates language versions independently. Live regional latency,
-platform deployment smoke checks, HTTP/3, DNS routing, and global revocation are not
-established by localhost tests. Review those separately before a public release.
+[Performance guide](https://irondome.dev/docs/guides/performance) ? [Published benchmarks](https://irondome.dev/benchmarks) ? [Errors](https://irondome.dev/docs/errors).
+
+## Contributing
+
+Issues and pull requests are welcome. Include the SDK, runtime version, expected behavior and a minimal example. Remove API keys and personal email addresses before sharing logs.
+
+See [TESTING.md](TESTING.md) for local fixtures, commands and measurement boundaries. Keep SDK changes scoped to their language folder and preserve the shared [API contract](https://irondome.dev/docs/api/check).
+
+## License
+
+[MIT](LICENSE). Maintained by [IrondomeDev](https://github.com/IrondomeDev).
