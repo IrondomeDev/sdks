@@ -39,7 +39,7 @@
     "url": "https://github.com/IrondomeDev/sdks.git",
     "directory": "javascript"
   },
-  "homepage": "https://irondome.dev/docs/guides/javascript",
+  "homepage": "https://irondome.dev/docs/guides/node",
   "bugs": {
     "url": "https://github.com/IrondomeDev/sdks/issues"
   }

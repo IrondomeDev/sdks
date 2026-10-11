@@ -1,5 +1,9 @@
 # IronDome Rust SDK
 
+[Rust integration guide](https://irondome.dev/docs/guides/rust) ·
+[API reference](https://irondome.dev/docs/api/check) ·
+[Plans and endpoints](https://irondome.dev/docs/plans)
+
 An asynchronous client built on reqwest and rustls. Cloning `Client` shares the
 connection pool, immutable credentials, and concurrency admission limit. The SDK
 uses a separate Cargo workspace so native HTTP dependencies do not affect the

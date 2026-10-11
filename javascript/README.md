@@ -1,5 +1,10 @@
 # IronDome JavaScript SDK
 
+[Node.js guide](https://irondome.dev/docs/guides/node) ?
+[Serverless integrations](https://irondome.dev/docs/guides/edge-serverless) ?
+[API reference](https://irondome.dev/docs/api/check) ?
+[Plans and endpoints](https://irondome.dev/docs/plans)
+
 A server-only SDK with one API contract and three transport entry points. The
 portable entry has no Node imports or runtime dependencies. The Node adapter owns
 an HTTPS connection pool; the Deno adapter owns a native HTTP client.
