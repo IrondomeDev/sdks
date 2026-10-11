@@ -5,7 +5,7 @@
 [![MIT license](https://img.shields.io/badge/license-MIT-F76808)](LICENSE)
 [![Documentation](https://img.shields.io/badge/read-documentation-F76808)](https://irondome.dev/docs)
 
-Official open-source SDKs for [IronDome](https://irondome.dev), a disposable email detection API for signup forms and backend applications. Check temporary email domains and known disposable addresses, including aliases on supported email providers.
+Official open-source SDKs for [IronDome](https://irondome.dev), the fastest and most accurate disposable email detection API for signup forms and backend applications. Check temporary email domains and known disposable addresses, including aliases on supported email providers.
 
 The free plan includes **500 checks per month**. Get an API key from the [dashboard](https://app.irondome.dev/) and follow the [quickstart](https://irondome.dev/docs/quickstart).
 
