@@ -1,5 +1,5 @@
 {
-  "name": "@irondome/sdk",
+  "name": "@irondome-dev/sdk",
   "version": "0.1.0",
   "description": "Server-side IronDome API clients with reusable secure transports",
   "type": "module",
@@ -30,7 +30,6 @@
     "test": "node --test test/client.test.js",
     "typecheck": "tsc --noEmit --strict --lib ES2022,DOM --module NodeNext --moduleResolution NodeNext test/types.ts"
   },
-  "private": true,
   "devDependencies": {
     "typescript": "5.8.3"
   },
@@ -42,5 +41,9 @@
   "homepage": "https://irondome.dev/docs/guides/node",
   "bugs": {
     "url": "https://github.com/IrondomeDev/sdks/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
   }
 }
