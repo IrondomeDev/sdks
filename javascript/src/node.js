@@ -13,21 +13,21 @@ export class IronDome extends BaseClient {
       minVersion: "TLSv1.2", rejectUnauthorized: true, ca: options.ca,
     });
     try {
-      super(options, ({ url, method, headers, body, signal }) => new Promise((resolve, reject) => {
+      super(options, ({ url, method, headers, body, signal, maxResponseBytes = MAX_RESPONSE_BYTES }) => new Promise((resolve, reject) => {
         const req = request(url, { method, headers: body ? { ...headers, "content-length": body.byteLength } : headers,
           agent, signal, maxHeaderSize: 16384 }, (res) => {
           const chunks = [];
           let size = 0;
           const declared = res.headers["content-length"];
-          if (declared && Number(declared) > MAX_RESPONSE_BYTES) {
+          if (declared && Number(declared) > maxResponseBytes) {
             res.destroy();
-            reject(new ProtocolError("Response exceeds 16384 bytes."));
+            reject(new ProtocolError("Response exceeds its byte limit."));
             return;
           }
           res.on("data", (chunk) => {
             size += chunk.length;
-            if (size > MAX_RESPONSE_BYTES) {
-              reject(new ProtocolError("Response exceeds 16384 bytes."));
+            if (size > maxResponseBytes) {
+              reject(new ProtocolError("Response exceeds its byte limit."));
               res.destroy();
             } else chunks.push(chunk);
           });

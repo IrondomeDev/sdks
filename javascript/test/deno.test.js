@@ -28,6 +28,11 @@ Deno.test("Deno native pool: verified TLS reuse, fixed length, no replay, deadli
     const health = await client.warmup();
     const first = await client.check("é@example.com");
     const second = await client.check("person@example.com");
+    const bulk = await client.checkBulk(["person@example.com", "broken", "person@example.com"]);
+    assert(bulk.checked === 2 && bulk.failed === 1 && bulk.results[1].error.code === "invalid_email");
+    assert(second.requestId.split("-")[0] === bulk.requestId.split("-")[0]);
+    const quota = await rejects(() => client.checkBulk(["quota@example.com"]), APIError);
+    assert(quota.status === 429 && quota.code === "monthly_quota_exceeded");
     assert(health.requestId.split("-")[0] === first.requestId.split("-")[0]);
     assert(first.requestId.split("-")[0] === second.requestId.split("-")[0]);
     const error = await rejects(() => client.check("unavailable@example.com"), APIError);
@@ -43,7 +48,7 @@ Deno.test("Deno native pool: verified TLS reuse, fixed length, no replay, deadli
     try {
       const response = await fetch(fixture.url + "/_stats", { client: raw });
       const stats = await response.json();
-      assert(stats.checks_seen === 6, "billable POST was replayed");
+      assert(stats.checks_seen === 8, "billable POST was replayed");
       assert(stats.health_authorized === false);
     } finally { raw.close(); }
   } finally {

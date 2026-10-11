@@ -1,20 +1,18 @@
 # IronDome JavaScript SDK
 
-[Node.js guide](https://irondome.dev/docs/guides/node) ?
-[Serverless integrations](https://irondome.dev/docs/guides/edge-serverless) ?
-[API reference](https://irondome.dev/docs/api/check) ?
+[Node.js guide](https://irondome.dev/docs/guides/node) ·
+[Serverless integrations](https://irondome.dev/docs/guides/edge-serverless) ·
+[API reference](https://irondome.dev/docs/api/check) ·
 [Plans and endpoints](https://irondome.dev/docs/plans)
 
 A server-only SDK with one API contract and three transport entry points. The
 portable entry has no Node imports or runtime dependencies. The Node adapter owns
 an HTTPS connection pool; the Deno adapter owns a native HTTP client.
 
-## Install from the repository
-
-The package is not published. From an application next to this checkout:
+## Install
 
 ```sh
-npm install /absolute/path/to/sdks/javascript
+npm install @irondome-dev/sdk@0.1.0
 ```
 
 Node.js 22 or newer is required for the Node adapter. TypeScript declarations ship
@@ -22,10 +20,30 @@ with every entry point. Deno can import source by a relative path after vendorin
 this directory. Do not embed credentials in module URLs or import private GitHub
 source using an API key. Production releases should use reviewed, pinned packages.
 
+## Endpoints and bulk checks
+
+Use `https://free.irondome.dev` with a free key or `https://api.irondome.dev`
+with a paid key. Change both the endpoint and key when switching plans.
+The free plan includes 500 checks per month; each syntactically valid email
+in a bulk request counts as one check.
+
+`check(email)` sends one email. `checkBulk(emails)` accepts 1?100 strings,
+returns ordered results, and preserves invalid-email errors per item.
+Request bodies are limited to 1,024 bytes for single checks and 65,536 bytes
+for bulk checks. Neither operation retries automatically.
+
+```js
+const batch = await client.checkBulk(['person@example.com', 'invalid']);
+for (const item of batch.results) {
+  if ('error' in item) console.log(item.index, item.error.code);
+  else console.log(item.index, item.disposable);
+}
+```
+
 ## Node.js
 
 ```js
-import { IronDome, APIError } from '@irondome/sdk/node';
+import { IronDome, APIError } from '@irondome-dev/sdk/node';
 
 const client = new IronDome({
   apiKey: process.env.IRONDOME_API_KEY,
@@ -98,7 +116,7 @@ custom CA data or replace a trusted Fetch implementation after construction.
 
 ## Vercel Functions
 
-Use `@irondome/sdk/node` in the Node.js runtime. Create a module-scoped client, keep
+Use `@irondome-dev/sdk/node` in the Node.js runtime. Create a module-scoped client, keep
 configuration immutable, and reuse it across concurrent invocations in one warm
 instance. Do not call `close` in a request's `finally` block: other invocations may
 still be using the pool. Use the portable entry in a Fetch-only runtime instead.

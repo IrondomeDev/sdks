@@ -1,4 +1,4 @@
-import { IronDome, APIError, type CheckResult } from "../src/index.js";
+import { IronDome, APIError, type CheckResult, type BulkResult } from "../src/index.js";
 import { IronDome as NodeClient } from "../src/node.js";
 const client = new IronDome({ baseUrl: "https://example.test", apiKey: "test" });
 const node = new NodeClient({ baseUrl: "https://example.test", apiKey: "test", maxSockets: 8 });
@@ -7,6 +7,10 @@ void result;
 void node;
 function errorCode(error: unknown): string | undefined { return error instanceof APIError ? error.code : undefined; }
 void errorCode;
+const bulk: Promise<BulkResult> = node.checkBulk(["a@example.com", "broken"] as const);
+void bulk;
+// @ts-expect-error Bulk entries must be strings.
+client.checkBulk([123]);
 // @ts-expect-error Numeric email inputs are not part of the API.
 client.check(123);
 // @ts-expect-error Node uses its own Agent, not an injected Fetch adapter.

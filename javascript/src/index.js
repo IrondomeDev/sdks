@@ -7,7 +7,7 @@ export class IronDome extends BaseClient {
   constructor(options) {
     const fetcher = options.fetch ?? globalThis.fetch;
     if (typeof fetcher !== "function") throw new ConfigurationError("This runtime requires a Fetch implementation.");
-    super(options, async ({ url, method, headers, body, signal }) => {
+    super(options, async ({ url, method, headers, body, signal, maxResponseBytes = MAX_RESPONSE_BYTES }) => {
       const response = await fetcher(url, {
         method, headers, body, signal, redirect: "manual", credentials: "omit", cache: "no-store",
       });
@@ -16,15 +16,15 @@ export class IronDome extends BaseClient {
       let size = 0;
       try {
         const declared = response.headers.get("content-length");
-        if (declared && /^\d+$/.test(declared) && Number(declared) > MAX_RESPONSE_BYTES) {
-          throw new ProtocolError("Response exceeds 16384 bytes.");
+        if (declared && /^\d+$/.test(declared) && Number(declared) > maxResponseBytes) {
+          throw new ProtocolError("Response exceeds its byte limit.");
         }
         if (reader) {
           while (true) {
             const { done, value } = await reader.read();
             if (done) break;
             size += value.byteLength;
-            if (size > MAX_RESPONSE_BYTES) throw new ProtocolError("Response exceeds 16384 bytes.");
+            if (size > maxResponseBytes) throw new ProtocolError("Response exceeds its byte limit.");
             chunks.push(value);
           }
         }

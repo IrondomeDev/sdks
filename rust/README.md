@@ -9,13 +9,13 @@ connection pool, immutable credentials, and concurrency admission limit. The SDK
 uses a separate Cargo workspace so native HTTP dependencies do not affect the
 Fastly Wasm application.
 
-## Install from source
+## Install
 
-This crate is not published. Add a local dependency to a Tokio application:
+Add the SDK to a Tokio application:
 
 ```toml
 [dependencies]
-irondome-sdk = { path = "/absolute/path/to/sdks/rust" }
+irondome-sdk = "0.1.0"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -39,6 +39,19 @@ Use a timer-enabled Tokio runtime. Construct once inside application initializat
 clone for concurrent tasks, and retain it across checks. Drop all clones after work
 completes. Creating a reqwest client per request throws away the pool. There is no
 blocking Rust wrapper and this native client is not a Fastly/Wasm runtime adapter.
+
+## Endpoints and bulk checks
+
+Use `https://free.irondome.dev` with a free key or `https://api.irondome.dev`
+with a paid key. Change both the endpoint and key when switching plans.
+The free plan includes 500 checks per month. Each syntactically valid email
+in a bulk request counts as one check.
+
+`client.check_bulk(&["person@example.com", "invalid"]).await?` accepts 1?100
+strings. Results preserve input order as `BulkOutcome::Checked` or
+`BulkOutcome::Invalid`, with `checked` and `failed` counts. Single request bodies
+are limited to 1,024 bytes and bulk bodies to 65,536 bytes. No call retries
+automatically; a timed-out request might already have been processed.
 
 ## Cold-start and connection behavior
 

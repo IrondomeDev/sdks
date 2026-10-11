@@ -17,10 +17,22 @@ export interface CheckResult extends Metadata {
   readonly disposable: boolean;
   readonly reason: "blocked_email" | "blocked_domain" | "allowed_domain" | "not_listed";
 }
+export interface BulkCheckedItem extends Omit<CheckResult, keyof Metadata> { readonly index: number; }
+export interface BulkFailedItem {
+  readonly index: number;
+  readonly error: { readonly code: "invalid_email"; readonly message: string; };
+}
+export type BulkItem = BulkCheckedItem | BulkFailedItem;
+export interface BulkResult extends Metadata {
+  readonly results: readonly BulkItem[];
+  readonly checked: number;
+  readonly failed: number;
+}
 export interface HealthResult extends Metadata { readonly status: "ok"; }
 export class IronDome {
   constructor(options: ClientOptions);
   check(email: string, options?: RequestOptions): Promise<CheckResult>;
+  checkBulk(emails: readonly string[], options?: RequestOptions): Promise<BulkResult>;
   warmup(options?: RequestOptions): Promise<HealthResult>;
   /** Abort active calls and release owned resources. Do not call per invocation. */
   close(): void;

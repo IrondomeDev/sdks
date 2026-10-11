@@ -1,4 +1,4 @@
-use irondome_sdk::{Client, Error, Options};
+use irondome_sdk::{BulkOutcome, Client, Error, Options};
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
@@ -7,6 +7,71 @@ struct Fixture {
     child: Child,
     url: String,
     certificate: Vec<u8>,
+}
+
+#[tokio::test]
+async fn bulk_pool_order_error_bound_and_no_replay() {
+    let fixture = Fixture::start();
+    let client = fixture.client(Duration::from_secs(5));
+    let health = client.warmup().await.unwrap();
+    let result = client
+        .check_bulk(&["a@example.com", "broken", "a@example.com", ""])
+        .await
+        .unwrap();
+    assert_eq!(result.checked, 2);
+    assert_eq!(result.failed, 2);
+    assert!(matches!(result.results[1].outcome, BulkOutcome::Invalid(_)));
+    assert_eq!(
+        health.request_id.as_ref().unwrap().split('-').next(),
+        result.request_id.as_ref().unwrap().split('-').next()
+    );
+    assert_eq!(
+        client
+            .check_bulk(&["a@example.com"; 100])
+            .await
+            .unwrap()
+            .checked,
+        100
+    );
+    assert_eq!(client.check_bulk(&["broken", ""]).await.unwrap().checked, 0);
+    assert_eq!(
+        client
+            .check_bulk(&["padded@example.com"])
+            .await
+            .unwrap()
+            .checked,
+        1
+    );
+    for mode in ["quota", "redirect", "unavailable", "truncated"] {
+        let before = fixture.checks().await;
+        let error = client
+            .check_bulk(&[format!("{mode}@example.com")])
+            .await
+            .unwrap_err();
+        assert_eq!(fixture.checks().await, before + 1);
+        if mode == "quota" {
+            assert!(
+                matches!(error,Error::Api{status:429,ref code,..} if code=="monthly_quota_exceeded")
+            );
+        }
+    }
+    for mode in [
+        "bulk-invalid-index",
+        "bulk-invalid-count",
+        "bulk-invalid-error",
+        "oversized",
+        "chunked-oversized",
+    ] {
+        assert!(matches!(
+            client.check_bulk(&[format!("{mode}@example.com")]).await,
+            Err(Error::Protocol)
+        ));
+    }
+    let impatient = fixture.client(Duration::from_millis(30));
+    assert!(matches!(
+        impatient.check_bulk(&["slow@example.com"]).await,
+        Err(Error::Timeout)
+    ));
 }
 impl Fixture {
     fn start() -> Self {
@@ -78,7 +143,7 @@ async fn reuse_and_no_replay() {
     let fixture = Fixture::start();
     let client = fixture.client(Duration::from_secs(5));
     let health = client.warmup().await.unwrap();
-    let first = client.check("é@example.com").await.unwrap();
+    let first = client.check("Ã©@example.com").await.unwrap();
     let second = client.clone().check("person@example.com").await.unwrap();
     let connection =
         |id: &Option<String>| id.as_ref().unwrap().split('-').next().unwrap().to_owned();
@@ -161,7 +226,7 @@ async fn deadlines_and_drop_cancellation_release_capacity() {
 
 #[test]
 fn configuration_is_bounded_and_does_not_include_secrets() {
-    for key in ["", "has space", "bad\r\nkey", "é"] {
+    for key in ["", "has space", "bad\r\nkey", "Ã©"] {
         assert!(matches!(
             Client::new(key, "https://example.com", Options::default()),
             Err(Error::Configuration)

@@ -172,3 +172,73 @@ test("Fetch sanitizes error payloads and validates booleans and enums", async ()
   const client = new IronDome({ apiKey: "test", baseUrl, fetch: async () => json({ error: { code: "private", message: "private" } }, { status: 500 }) });
   await assert.rejects(client.warmup(), (error) => error instanceof APIError && error.code === "http_error" && !String(error).includes("private"));
 });
+
+test("Node bulk preserves order, duplicates, mixed errors and the warm socket", async () => {
+  const client = new NodeClient(options());
+  try {
+    const health = await client.warmup();
+    const result = await client.checkBulk(["person@example.com", "broken", "person@example.com", ""]);
+    assert.equal(health.requestId.split("-")[0], result.requestId.split("-")[0]);
+    assert.equal(result.checked, 2); assert.equal(result.failed, 2);
+    assert.deepEqual(result.results.map(item => item.index), [0, 1, 2, 3]);
+    assert.equal(result.results[1].error.code, "invalid_email");
+    assert.ok(!JSON.stringify(result).includes("private"));
+    assert.ok(!JSON.stringify(result).includes("@"));
+    assert.ok(Object.isFrozen(result.results));
+    assert.equal((await client.checkBulk(Array(100).fill("person@example.com"))).checked, 100);
+    assert.equal((await client.checkBulk(["broken", ""])).checked, 0);
+    assert.equal((await client.checkBulk(["padded@example.com"])).checked, 1);
+  } finally { client.close(); }
+});
+
+test("bulk validation rejects invalid types, Unicode and byte bounds before I/O", async () => {
+  let calls = 0;
+  const client = new IronDome({ ...options(), fetch: async () => { calls++; return json({results:[{index:0,...valid()}],checked:1,failed:0}); } });
+  for (const emails of [null, "x", [], Array(101).fill("x"), [2], ["\ud800"], ["x".repeat(65523)], ["é".repeat(32762)]]) {
+    await assert.rejects(client.checkBulk(emails), ValidationError);
+  }
+  assert.equal(calls, 0);
+  await client.checkBulk(["x".repeat(65521)]);
+  assert.equal(calls, 1);
+  client.close();
+});
+
+test("bulk quota errors and ambiguous failures never trigger POST replay", async () => {
+  const client = new NodeClient(options());
+  try {
+    for (const mode of ["quota", "redirect", "unavailable", "truncated"]) {
+      const before = await stats();
+      await assert.rejects(client.checkBulk([`${mode}@example.com`]), error => {
+        if (mode === "quota") assert.ok(error instanceof APIError && error.status === 429 && error.code === "monthly_quota_exceeded");
+        return true;
+      });
+      assert.equal((await stats()).checks_seen, before.checks_seen + 1);
+    }
+    for (const mode of ["bulk-invalid-index", "bulk-invalid-count", "bulk-invalid-error", "oversized", "chunked-oversized"]) {
+      await assert.rejects(client.checkBulk([`${mode}@example.com`]), ProtocolError);
+    }
+    await assert.rejects(client.checkBulk(["slow@example.com"], {timeoutMs:30}), TimeoutError);
+    const signal = AbortSignal.abort("private");
+    await assert.rejects(client.checkBulk(["a@example.com"], {signal}), CancelledError);
+  } finally {client.close();}
+  await assert.rejects(client.checkBulk(["a@example.com"]), ClosedError);
+});
+
+test("Fetch bulk rejects wrong indexes, counts, missing or ambiguous item fields", async () => {
+  const good = {results:[{index:0,...valid()}],checked:1,failed:0};
+  for (const value of [
+    {...good,checked:true}, {...good,failed:-1}, {...good,results:[]},
+    {...good,results:[{index:1,...valid()}]}, {...good,results:[{index:0,...valid(),error:{code:"invalid_email"}}]},
+    {...good,results:[{index:0,...valid(),valid:1}]},
+    {results:[{index:0,error:{code:"private"}}],checked:0,failed:1},
+  ]) {
+    const client = new IronDome({...options(),fetch:async()=>json(value)});
+    await assert.rejects(client.checkBulk(["a@example.com"]), ProtocolError);
+    client.close();
+  }
+  for (const code of ["empty_batch", "batch_too_large", "monthly_quota_exceeded"]) {
+    const client = new IronDome({...options(),fetch:async()=>json({error:{code,message:"private"}},{status:429})});
+    await assert.rejects(client.checkBulk(["a@example.com"]), error=>error instanceof APIError && error.code===code && !String(error).includes("private"));
+    client.close();
+  }
+});

@@ -6,6 +6,7 @@ license = "MIT"
 repository = "https://github.com/IrondomeDev/sdks"
 homepage = "https://irondome.dev/docs/guides/rust"
 readme = "README.md"
+include = ["src/**", "Cargo.toml", "Cargo.lock", "README.md", "LICENSE"]
 description = "Secure pooled IronDome API client"
 
 # Keep native HTTP dependencies out of the Fastly Wasm workspace.
