@@ -40,6 +40,60 @@ func fixture(t *testing.T, h2 bool) (*Client, *atomic.Int64, *atomic.Int64, *ato
 			w.WriteHeader(400)
 			return
 		}
+		if r.URL.Path == "/v1/check/bulk" {
+			var input struct {
+				Emails []string `json:"emails"`
+			}
+			if json.Unmarshal(raw, &input) != nil || len(input.Emails) < 1 || len(input.Emails) > 100 {
+				w.WriteHeader(400)
+				return
+			}
+			mode := strings.Split(input.Emails[0], "@")[0]
+			switch mode {
+			case "quota":
+				w.WriteHeader(429)
+				fmt.Fprint(w, `{"error":{"code":"monthly_quota_exceeded","message":"private"}}`)
+				return
+			case "redirect":
+				w.Header().Set("Location", serverLocation(r))
+				w.WriteHeader(307)
+				return
+			case "unavailable":
+				w.WriteHeader(503)
+				fmt.Fprint(w, `{"error":{"code":"service_unavailable"}}`)
+				return
+			case "oversized":
+				fmt.Fprint(w, strings.Repeat("x", maxBulkBytes+1))
+				return
+			case "truncated":
+				w.Header().Set("Content-Length", "100")
+				fmt.Fprint(w, "{")
+				return
+			case "slow":
+				time.Sleep(150 * time.Millisecond)
+			}
+			results := []map[string]any{}
+			checked := 0
+			for index, email := range input.Emails {
+				item := map[string]any{"index": index}
+				if strings.Contains(email, "@") {
+					item["provider"] = "custom"
+					item["valid"] = true
+					item["disposable"] = false
+					item["reason"] = "not_listed"
+					checked++
+				} else {
+					item["error"] = map[string]string{"code": "invalid_email", "message": "private"}
+				}
+				results = append(results, item)
+			}
+			response := map[string]any{"results": results, "checked": checked, "failed": len(results) - checked}
+			if mode == "padded" {
+				response["padding"] = strings.Repeat("x", 20000)
+			}
+			json.NewEncoder(w).Encode(response)
+			return
+		}
 		var input map[string]string
 		if json.Unmarshal(raw, &input) != nil || len(input) != 1 {
 			w.WriteHeader(400)
@@ -244,4 +298,93 @@ func TestSchemaAndRetryAfter(t *testing.T) {
 	if retryAfter("not a date") != nil || *retryAfter("99999999") != 24*time.Hour || *retryAfter("000000") != 0 {
 		t.Fatal("invalid Retry-After")
 	}
+}
+
+func TestBulkRoundTripAndReuse(t *testing.T) {
+	for _, h2 := range []bool{false, true} {
+		t.Run(fmt.Sprint(h2), func(t *testing.T) {
+			c, connections, _, healthAuth := fixture(t, h2)
+			if _, err := c.Warmup(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			result, err := c.CheckBulk(context.Background(), []string{"a@example.com", "broken", "a@example.com", ""})
+			if err != nil || result.Checked != 2 || result.Failed != 2 || result.Results[1].Error.Code != "invalid_email" || result.Results[0].Result == nil {
+				t.Fatalf("bulk result: %v, %v", result, err)
+			}
+			if strings.Contains(fmt.Sprint(result), "private") || connections.Load() != 1 || healthAuth.Load() != 0 {
+				t.Fatal("privacy or connection reuse failed")
+			}
+			for index, item := range result.Results {
+				if item.Index != index {
+					t.Fatal("incorrect result position")
+				}
+			}
+			if _, err := c.Check(context.Background(), "a@example.com"); err != nil {
+				t.Fatal(err)
+			}
+			emails := make([]string, 100)
+			for i := range emails {
+				emails[i] = "a@example.com"
+			}
+			result, err = c.CheckBulk(context.Background(), emails)
+			if err != nil || result.Checked != 100 {
+				t.Fatalf("boundary: %v", err)
+			}
+			result, err = c.CheckBulk(context.Background(), []string{"broken", ""})
+			if err != nil || result.Checked != 0 || result.Failed != 2 {
+				t.Fatal("invalid items")
+			}
+			if _, err = c.CheckBulk(context.Background(), []string{"padded@example.com"}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestBulkValidationAndSchemas(t *testing.T) {
+	for _, emails := range [][]string{nil, {}, make([]string, 101), {"\xff"}, {strings.Repeat("x", 65523)}, {strings.Repeat("é", 32762)}} {
+		_, err := encodeBulk(emails)
+		errorKind(t, err, Validation)
+	}
+	if body, err := encodeBulk([]string{strings.Repeat("x", 65521)}); err != nil || len(body) != 65536 {
+		t.Fatal("exact body bound")
+	}
+	for _, raw := range []string{
+		`{"results":[],"checked":1,"failed":0}`,
+		`{"results":[{"index":true}],"checked":0,"failed":1}`,
+		`{"results":[{"index":null,"error":{"code":"invalid_email"}}],"checked":0,"failed":1}`,
+		`{"results":[{"index":0,"error":{"code":"private"}}],"checked":0,"failed":1}`,
+		`{"results":[{"index":0,"valid":true,"error":{"code":"invalid_email"}}],"checked":0,"failed":1}`,
+		`{"results":[{"index":0,"error":{"code":"invalid_email"}}],"checked":1,"failed":0}`,
+	} {
+		_, err := parseBulk([]byte(raw), nil, 1)
+		errorKind(t, err, Protocol)
+	}
+}
+
+func TestBulkNoReplayAndDeadline(t *testing.T) {
+	c, _, checks, _ := fixture(t, false)
+	for _, mode := range []string{"quota", "redirect", "unavailable", "truncated"} {
+		before := checks.Load()
+		_, err := c.CheckBulk(context.Background(), []string{mode + "@example.com"})
+		if err == nil || checks.Load() != before+1 {
+			t.Fatal("bulk request replayed")
+		}
+		if mode == "quota" {
+			sdk := errorKind(t, err, API)
+			if sdk.Code != "monthly_quota_exceeded" || sdk.StatusCode != 429 {
+				t.Fatal("quota error")
+			}
+		}
+	}
+	_, err := c.CheckBulk(context.Background(), []string{"oversized@example.com"})
+	errorKind(t, err, Protocol)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	_, err = c.CheckBulk(ctx, []string{"slow@example.com"})
+	errorKind(t, err, Timeout)
+	canceled, stop := context.WithCancel(context.Background())
+	stop()
+	_, err = c.CheckBulk(canceled, []string{"a@example.com"})
+	errorKind(t, err, Canceled)
 }

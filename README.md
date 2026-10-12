@@ -47,11 +47,11 @@ An asynchronous reqwest/rustls client with a shared connection pool. [Rust guide
 | JavaScript / TypeScript | [npm: @irondome-dev/sdk](https://www.npmjs.com/package/@irondome-dev/sdk) | [Node.js, Fetch and Deno](javascript/README.md) |
 | Rust | [crates.io: irondome-sdk](https://crates.io/crates/irondome-sdk) | [Rust](rust/README.md) |
 | Python 3.11+ | Source available; PyPI publication pending | [Python](python/README.md) |
-| Go 1.23+ | Source available; versioned module release pending | [Go](go/README.md) |
+| Go 1.23+ | [Go module v0.1.0](https://pkg.go.dev/github.com/IrondomeDev/sdks/go@v0.1.0) | [Go](go/README.md) |
 
 ## Single and bulk email checks
 
-JavaScript and Rust 0.1.0 support single checks, bulk requests of up to 100 emails, and optional health warmup. Bulk results preserve input order and include invalid-address errors per item.
+JavaScript, Rust, and Go 0.1.0 support single checks, bulk requests of up to 100 emails, and optional health warmup. Bulk results preserve input order and include invalid-address errors per item.
 
 ```js
 const batch = await client.checkBulk(['person@example.com', 'invalid']);

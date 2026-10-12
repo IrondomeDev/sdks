@@ -23,6 +23,7 @@ import (
 )
 
 const maxResponseBytes = 16384
+const maxBulkBytes = 65536
 
 // Kind identifies a failure without retaining a request, credential, or response body.
 type Kind string
@@ -89,6 +90,19 @@ type CheckResult struct {
 }
 type HealthResult struct{ RequestID, DetectorVersion string }
 
+// BulkItem contains exactly one of Result and Error, preserving the input index.
+type BulkItem struct {
+	Index  int
+	Result *CheckResult
+	Error  *BulkItemError
+}
+type BulkItemError struct{ Code, Message string }
+type BulkResult struct {
+	Results                    []BulkItem
+	Checked, Failed            int
+	RequestID, DetectorVersion string
+}
+
 // Client is safe for concurrent use. Reuse it rather than constructing per check.
 type Client struct {
 	origin, authorization string
@@ -105,7 +119,7 @@ func (c *Client) GoString() string { return c.String() }
 var originPattern = regexp.MustCompile(`(?i)^https://[^/?#\\\s]+/?$`)
 var metadataPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
 var digitsPattern = regexp.MustCompile(`^[0-9]+$`)
-var errorCodes = strings.Fields("empty_body invalid_content_length invalid_body_length invalid_json authorization_required invalid_authorization invalid_api_key expired_api_key inactive_api_key revoked_api_key insufficient_scope not_found method_not_allowed content_length_required body_too_large invalid_email internal_error service_unavailable")
+var errorCodes = strings.Fields("empty_body invalid_content_length invalid_body_length invalid_json authorization_required invalid_authorization invalid_api_key expired_api_key inactive_api_key revoked_api_key insufficient_scope not_found method_not_allowed content_length_required body_too_large invalid_email internal_error service_unavailable monthly_quota_exceeded empty_batch batch_too_large")
 
 // New creates a client without network I/O. baseURL must be a trusted HTTPS origin.
 func New(apiKey, baseURL string, options Options) (*Client, error) {
@@ -210,7 +224,7 @@ func (c *Client) Check(ctx context.Context, email string) (CheckResult, error) {
 	if err != nil {
 		return CheckResult{}, err
 	}
-	raw, headers, err := c.request(ctx, false, body)
+	raw, headers, err := c.request(ctx, false, body, false)
 	if err != nil {
 		return CheckResult{}, err
 	}
@@ -220,7 +234,7 @@ func (c *Client) Check(ctx context.Context, email string) (CheckResult, error) {
 // Warmup establishes reusable transport state with an unauthenticated health GET.
 // It does not warm authorization or detector state and is not an implicit Check step.
 func (c *Client) Warmup(ctx context.Context) (HealthResult, error) {
-	raw, headers, err := c.request(ctx, true, nil)
+	raw, headers, err := c.request(ctx, true, nil, false)
 	if err != nil {
 		return HealthResult{}, err
 	}
@@ -233,7 +247,92 @@ func (c *Client) Warmup(ctx context.Context) (HealthResult, error) {
 	return HealthResult{metadata(headers.Get("X-Request-ID")), metadata(headers.Get("X-Detector-Base-Version"))}, nil
 }
 
-func (c *Client) request(ctx context.Context, health bool, body []byte) ([]byte, http.Header, error) {
+// CheckBulk checks 1–100 strings with one HTTP request. It never retries a POST.
+func (c *Client) CheckBulk(ctx context.Context, emails []string) (BulkResult, error) {
+	body, err := encodeBulk(emails)
+	if err != nil {
+		return BulkResult{}, err
+	}
+	raw, headers, err := c.request(ctx, false, body, true)
+	if err != nil {
+		return BulkResult{}, err
+	}
+	return parseBulk(raw, headers, len(emails))
+}
+
+func encodeBulk(emails []string) ([]byte, error) {
+	if len(emails) < 1 || len(emails) > 100 {
+		return nil, &Error{Kind: Validation}
+	}
+	bytesCount := 0
+	for _, email := range emails {
+		if !utf8.ValidString(email) || len(email) > maxBulkBytes-bytesCount {
+			return nil, &Error{Kind: Validation}
+		}
+		bytesCount += len(email)
+	}
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	encoder.SetEscapeHTML(false)
+	if encoder.Encode(struct {
+		Emails []string `json:"emails"`
+	}{emails}) != nil {
+		return nil, &Error{Kind: Validation}
+	}
+	body := bytes.TrimSuffix(buf.Bytes(), []byte{'\n'})
+	if len(body) > maxBulkBytes {
+		return nil, &Error{Kind: Validation}
+	}
+	return body, nil
+}
+
+func parseBulk(raw []byte, headers http.Header, count int) (BulkResult, error) {
+	var wire struct {
+		Results []json.RawMessage `json:"results"`
+		Checked *int              `json:"checked"`
+		Failed  *int              `json:"failed"`
+	}
+	if json.Unmarshal(raw, &wire) != nil || len(wire.Results) != count || wire.Checked == nil || wire.Failed == nil ||
+		*wire.Checked < 0 || *wire.Failed < 0 || *wire.Checked > count || *wire.Failed != count-*wire.Checked {
+		return BulkResult{}, &Error{Kind: Protocol}
+	}
+	result := BulkResult{Results: make([]BulkItem, 0, count), RequestID: metadata(headers.Get("X-Request-ID")), DetectorVersion: metadata(headers.Get("X-Detector-Base-Version"))}
+	for index, encoded := range wire.Results {
+		var item map[string]json.RawMessage
+		var position int
+		if json.Unmarshal(encoded, &item) != nil || item == nil || item["index"] == nil || string(item["index"]) == "null" || json.Unmarshal(item["index"], &position) != nil || position != index {
+			return BulkResult{}, &Error{Kind: Protocol}
+		}
+		if detail, exists := item["error"]; exists {
+			var failure struct {
+				Code string `json:"code"`
+			}
+			if json.Unmarshal(detail, &failure) != nil || failure.Code != "invalid_email" {
+				return BulkResult{}, &Error{Kind: Protocol}
+			}
+			for _, field := range []string{"provider", "valid", "disposable", "reason"} {
+				if _, exists := item[field]; exists {
+					return BulkResult{}, &Error{Kind: Protocol}
+				}
+			}
+			result.Results = append(result.Results, BulkItem{Index: index, Error: &BulkItemError{Code: "invalid_email", Message: "Provide a syntactically valid email address."}})
+			result.Failed++
+		} else {
+			check, err := parseCheck(encoded, nil)
+			if err != nil {
+				return BulkResult{}, err
+			}
+			result.Results = append(result.Results, BulkItem{Index: index, Result: &check})
+			result.Checked++
+		}
+	}
+	if result.Checked != *wire.Checked {
+		return BulkResult{}, &Error{Kind: Protocol}
+	}
+	return result, nil
+}
+
+func (c *Client) request(ctx context.Context, health bool, body []byte, bulk bool) ([]byte, http.Header, error) {
 	if ctx == nil {
 		return nil, nil, &Error{Kind: Configuration}
 	}
@@ -251,6 +350,11 @@ func (c *Client) request(ctx context.Context, health bool, body []byte) ([]byte,
 	c.mu.Unlock()
 	defer func() { <-c.slots }()
 	method, path := "POST", "/v1/check"
+	limit := maxResponseBytes
+	if bulk {
+		path = "/v1/check/bulk"
+		limit = maxBulkBytes
+	}
 	if health {
 		method, path = "GET", "/healthz"
 	}
@@ -272,14 +376,14 @@ func (c *Client) request(ctx context.Context, health bool, body []byte) ([]byte,
 		return nil, nil, transportError(err)
 	}
 	defer res.Body.Close()
-	if res.ContentLength > maxResponseBytes || (res.Header.Get("Content-Encoding") != "" && !strings.EqualFold(res.Header.Get("Content-Encoding"), "identity")) {
+	if res.ContentLength > int64(limit) || (res.Header.Get("Content-Encoding") != "" && !strings.EqualFold(res.Header.Get("Content-Encoding"), "identity")) {
 		return nil, nil, &Error{Kind: Protocol}
 	}
-	raw, err := io.ReadAll(io.LimitReader(res.Body, maxResponseBytes+1))
+	raw, err := io.ReadAll(io.LimitReader(res.Body, int64(limit+1)))
 	if err != nil {
 		return nil, nil, transportError(err)
 	}
-	if len(raw) > maxResponseBytes {
+	if len(raw) > limit {
 		return nil, nil, &Error{Kind: Protocol}
 	}
 	isJSON := strings.EqualFold(strings.TrimSpace(strings.Split(res.Header.Get("Content-Type"), ";")[0]), "application/json") && utf8.Valid(raw)

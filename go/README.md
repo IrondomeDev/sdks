@@ -3,14 +3,12 @@
 A concurrent client using only the Go standard library. Go 1.23 or newer is
 required. One `Client` owns one HTTP transport and its TLS session cache.
 
-## Install from this checkout
+## Install
 
-The repository is private; no public module release is implied. In a consuming
-module, add a local replacement until a reviewed release is available:
+Install the versioned module in your Go project:
 
 ```sh
-go mod edit -replace github.com/IrondomeDev/sdks/go=/absolute/path/to/sdks/go
-go get github.com/IrondomeDev/sdks/go
+go get github.com/IrondomeDev/sdks/go@v0.1.0
 ```
 
 ```go
@@ -41,6 +39,29 @@ In a server, construct the client once and share it across goroutines. Close at
 final shutdown after draining work, not per HTTP handler or Lambda invocation.
 `Close` releases idle sockets and rejects new calls; active operations finish under
 their contexts. A canceled context is never treated as a classification result.
+
+## Bulk checks
+
+`CheckBulk` checks 1–100 emails in one request and preserves their input order.
+Each item contains either a `Result` or an `Error` with code `invalid_email`.
+
+```go
+batch, err := client.CheckBulk(ctx, []string{"person@example.com", "invalid"})
+if err != nil { log.Fatal(err) }
+for _, item := range batch.Results {
+    if item.Error != nil {
+        log.Printf("item=%d error=%s", item.Index, item.Error.Code)
+    } else {
+        log.Printf("item=%d disposable=%t", item.Index, item.Result.Disposable)
+    }
+}
+```
+
+Each valid email counts as one check. Bulk request and response bodies are limited
+to 64 KiB. Requests are never automatically retried.
+
+Use `https://free.irondome.dev` with a free key or `https://api.irondome.dev` with a
+paid key. Change both the endpoint and key when switching plans.
 
 ## Transport and warmup
 
@@ -97,9 +118,10 @@ context.Canceled and context.DeadlineExceeded for their corresponding kinds.
 
 No raw server error message, submitted address, or credential is retained in the
 SDK error. Redirects are rejected, compression is not requested or decoded, and
-responses are capped at 16 KiB. Requests use a known byte length and exactly one
-JSON string field. Go's HTML escaping is disabled for a compact wire body; JSON
-escaping remains enabled. Invalid UTF-8 or bodies over 1,024 bytes fail locally.
+single-check responses are capped at 16 KiB. Requests use a known byte length and
+one JSON field (`email` or `emails`). Go's HTML escaping is disabled for a compact wire body; JSON
+escaping remains enabled. Invalid UTF-8 and single-check bodies over 1,024 bytes
+fail locally; bulk bodies have a 65,536-byte limit.
 
 No SDK retry loop or idempotency header is installed. POST bodies do not expose
 GetBody for replay. Go may perform transport-internal recovery only under its own
