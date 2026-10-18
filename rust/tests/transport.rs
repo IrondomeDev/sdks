@@ -102,8 +102,8 @@ impl Fixture {
     fn client(&self, timeout: Duration) -> Client {
         Client::new(
             "test-key",
-            &self.url,
             Options {
+                base_url: self.url.clone(),
                 timeout,
                 additional_root_certificates: vec![self.certificate.clone()],
                 ..Options::default()
@@ -185,12 +185,19 @@ async fn reuse_and_no_replay() {
 #[tokio::test]
 async fn verified_tls_and_protocol_limits() {
     let fixture = Fixture::start();
-    let untrusted = Client::new("test-key", &fixture.url, Options::default()).unwrap();
+    let untrusted = Client::new(
+        "test-key",
+        Options {
+            base_url: fixture.url.clone(),
+            ..Options::default()
+        },
+    )
+    .unwrap();
     assert!(matches!(untrusted.warmup().await, Err(Error::Transport)));
     let wrong_host = Client::new(
         "test-key",
-        &fixture.url.replace("localhost", "127.0.0.1"),
         Options {
+            base_url: fixture.url.replace("127.0.0.1", "localhost"),
             additional_root_certificates: vec![fixture.certificate.clone()],
             ..Options::default()
         },
@@ -228,15 +235,21 @@ async fn deadlines_and_drop_cancellation_release_capacity() {
 fn configuration_is_bounded_and_does_not_include_secrets() {
     for key in ["", "has space", "bad\r\nkey", "Ã©"] {
         assert!(matches!(
-            Client::new(key, "https://example.com", Options::default()),
+            Client::new(
+                key,
+                Options {
+                    base_url: "https://example.com".into(),
+                    ..Options::default()
+                }
+            ),
             Err(Error::Configuration)
         ));
     }
     assert!(matches!(
         Client::new(
             "test-key",
-            "https://example.com",
             Options {
+                base_url: "https://example.com".into(),
                 timeout: Duration::ZERO,
                 ..Options::default()
             }

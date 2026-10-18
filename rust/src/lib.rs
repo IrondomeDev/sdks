@@ -11,6 +11,8 @@ use tokio::sync::Semaphore;
 
 const MAX_RESPONSE_BYTES: usize = 16_384;
 const MAX_BULK_BYTES: usize = 65_536;
+/// Default unified production API origin for stable account credentials.
+pub const DEFAULT_BASE_URL: &str = "https://api.irondome.dev";
 const CODES: &[&str] = &[
     "empty_body",
     "invalid_content_length",
@@ -72,6 +74,8 @@ impl std::error::Error for Error {}
 /// Configure once at startup. All durations must be positive and at most one day.
 #[derive(Clone)]
 pub struct Options {
+    /// Trusted API origin. Defaults to [`DEFAULT_BASE_URL`].
+    pub base_url: String,
     pub timeout: Duration,
     pub connect_timeout: Duration,
     pub idle_timeout: Duration,
@@ -84,6 +88,7 @@ pub struct Options {
 impl Default for Options {
     fn default() -> Self {
         Self {
+            base_url: DEFAULT_BASE_URL.to_owned(),
             timeout: Duration::from_secs(5),
             connect_timeout: Duration::from_secs(2),
             idle_timeout: Duration::from_secs(20),
@@ -172,10 +177,10 @@ impl fmt::Debug for Client {
 }
 
 impl Client {
-    /// Construct without network I/O. base_url is trusted server configuration,
-    /// not an incoming request parameter. TLS verification cannot be disabled.
-    pub fn new(api_key: &str, base_url: &str, options: Options) -> Result<Self, Error> {
-        let origin = validate_origin(base_url)?;
+    /// Construct without network I/O. `Options::base_url` is trusted server
+    /// configuration, not an incoming request parameter. TLS verification stays enabled.
+    pub fn new(api_key: &str, options: Options) -> Result<Self, Error> {
+        let origin = validate_origin(&options.base_url)?;
         if api_key.is_empty()
             || api_key.len() > 4096
             || !api_key.bytes().all(|b| (33..=126).contains(&b))
@@ -373,7 +378,13 @@ fn validate_origin(value: &str) -> Result<reqwest::Url, Error> {
         return Err(Error::Configuration);
     }
     let url = reqwest::Url::parse(value).map_err(|_| Error::Configuration)?;
-    if url.host_str().is_none() || url.port() == Some(0) {
+    if url.host_str().is_none()
+        || url.port() == Some(0)
+        || matches!(
+            url.host_str().map(|host| host.trim_end_matches('.')),
+            Some("free.irondome.dev" | "irondome-free.edgecompute.app")
+        )
+    {
         return Err(Error::Configuration);
     }
     Ok(url)
@@ -539,6 +550,14 @@ mod tests {
             "https://host#",
             "https://host:0",
             "https://host\\x",
+        ] {
+            assert!(validate_origin(value).is_err());
+        }
+        for value in [
+            "https://free.irondome.dev",
+            "https://irondome-free.edgecompute.app",
+            "https://FREE.irondome.dev./",
+            "https://irondome-free.edgecompute.app./",
         ] {
             assert!(validate_origin(value).is_err());
         }

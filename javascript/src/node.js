@@ -1,6 +1,6 @@
 import { Agent, request } from "node:https";
 import { BaseClient, MAX_RESPONSE_BYTES, ProtocolError, TransportError, positiveInteger } from "./core.js";
-export { IronDomeError, APIError, ConfigurationError, ValidationError, ProtocolError,
+export { DEFAULT_BASE_URL, IronDomeError, APIError, ConfigurationError, ValidationError, ProtocolError,
   TransportError, TimeoutError, CancelledError, BusyError, ClosedError } from "./core.js";
 
 export class IronDome extends BaseClient {

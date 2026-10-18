@@ -1,6 +1,6 @@
 import { IronDome as FetchClient } from "./index.js";
 import { ConfigurationError, positiveInteger } from "./core.js";
-export { IronDomeError, APIError, ConfigurationError, ValidationError, ProtocolError,
+export { DEFAULT_BASE_URL, IronDomeError, APIError, ConfigurationError, ValidationError, ProtocolError,
   TransportError, TimeoutError, CancelledError, BusyError, ClosedError } from "./core.js";
 
 // Use this adapter only where Deno.createHttpClient is available. Supabase uses index.js.

@@ -133,7 +133,7 @@ def test_ssl_checks_cannot_be_disabled(options):
     with Client("test-key", base_url=options["base_url"]) as client, pytest.raises(TransportError) as error:
         client.warmup()
     assert error.value.__context__ is None
-    with Client("test-key", **{**options, "base_url": options["base_url"].replace("localhost", "127.0.0.1")}) as client:
+    with Client("test-key", **{**options, "base_url": options["base_url"].replace("127.0.0.1", "localhost")}) as client:
         with pytest.raises(TransportError):
             client.warmup()
 

@@ -1,12 +1,12 @@
 # IronDome Python SDK
 
 Synchronous and asyncio clients backed by owned, reusable HTTPX transports. Python
-3.11 or newer is required. The package is source-only and has not been published.
+3.11 or newer is required. PyPI publication is pending account review. Install the tagged source meanwhile.
 
 ## Install
 
 ```sh
-python -m pip install /absolute/path/to/sdks/python
+python -m pip install "git+https://github.com/IrondomeDev/sdks.git@javascript/v0.2.0#subdirectory=python"
 ```
 
 The dependency `httpx[http2]` enables TLS ALPN negotiation for HTTP/2, with HTTP/1.1
@@ -20,7 +20,6 @@ from irondome import Client, APIError
 
 client = Client(
     os.environ['IRONDOME_API_KEY'],
-    base_url=os.environ['IRONDOME_BASE_URL'],
 )
 
 def classify_email(email: str):
@@ -48,8 +47,7 @@ import os
 from irondome import AsyncClient
 
 async def application():
-    async with AsyncClient(os.environ['IRONDOME_API_KEY'],
-                           base_url=os.environ['IRONDOME_BASE_URL']) as client:
+    async with AsyncClient(os.environ['IRONDOME_API_KEY']) as client:
         # Optional: overlap transport preparation with independent startup work.
         async with asyncio.TaskGroup() as tasks:
             tasks.create_task(client.warmup())
@@ -78,7 +76,7 @@ Both constructors accept the same keyword options. All durations are seconds.
 
 | Keyword | Default | Meaning |
 | --- | --- | --- |
-| `base_url` | required | Trusted HTTPS origin, no path/query/fragment/userinfo |
+| `base_url` | `https://api.irondome.dev` | Trusted HTTPS origin, no path/query/fragment/userinfo |
 | `timeout` | 5.0 | Request budget; see synchronous limitation below |
 | `connect_timeout` | 2.0 | Connection phase cap, bounded by the request budget |
 | `pool_timeout` | 1.0 | Pool wait cap, bounded by the request budget |
@@ -172,3 +170,5 @@ performance validation that still requires an authorized deployment environment.
 
 Also see [HTTPX SSL](https://www.python-httpx.org/advanced/ssl/) and the
 [shared latency research](../TESTING.md).
+
+`DEFAULT_BASE_URL` is exported for deployment configuration. One account key and the canonical origin remain unchanged across plan changes; the server applies the current plan. Free accounts share 500 checks per organization per month, while paid accounts bypass that quota. The stable account-key backend is active in production as of 18 October 2026.

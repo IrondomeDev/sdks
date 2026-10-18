@@ -15,6 +15,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
 class Server(ThreadingHTTPServer):
+    # Concurrent pool tests must not be constrained by the default five-socket backlog.
+    request_queue_size = 128
     daemon_threads = True
 
     def __init__(self, address, handler):
@@ -74,6 +76,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         self.record(True)
+        if self.path == "/v1/check/bulk":
+            self.bulk()
+            return
         if self.path != "/v1/check":
             self.reply(404, {"error": {"code": "not_found"}})
             return
@@ -147,6 +152,78 @@ class Handler(BaseHTTPRequestHandler):
     def result():
         return {"provider": "custom", "valid": True, "disposable": False, "reason": "not_listed"}
 
+    def bulk(self):
+        length = self.headers.get("content-length")
+        if not length or not length.isdecimal() or self.headers.get("transfer-encoding"):
+            self.reply(411, {"error": {"code": "content_length_required"}})
+            return
+        if int(length) > 65536:
+            self.reply(413, {"error": {"code": "body_too_large"}})
+            self.close_connection = True
+            return
+        try:
+            data = json.loads(self.rfile.read(int(length)))
+            emails = data["emails"]
+            assert isinstance(emails, list) and 1 <= len(emails) <= 100 and all(isinstance(e, str) for e in emails)
+        except (ValueError, KeyError, TypeError, AssertionError):
+            self.reply(400, {"error": {"code": "invalid_json"}})
+            return
+        if self.headers.get("authorization") != "Bearer test-key":
+            self.reply(401, {"error": {"code": "invalid_api_key"}})
+            return
+        mode = emails[0].split("@", 1)[0]
+        if mode == "quota":
+            self.reply(429, {"error": {"code": "monthly_quota_exceeded", "message": "private"}})
+            return
+        if mode == "redirect":
+            self.reply(307, {}, {"location": "/redirect-target"})
+            return
+        if mode == "unavailable":
+            self.reply(503, {"error": {"code": "service_unavailable"}}, {"retry-after": "5"})
+            return
+        if mode == "oversized":
+            self.reply(200, b"x" * 65537)
+            return
+        if mode == "chunked-oversized":
+            self.send_response(200)
+            self.send_header("content-type", "application/json")
+            self.send_header("transfer-encoding", "chunked")
+            self.end_headers()
+            with contextlib.suppress(OSError):
+                self.wfile.write(b"10001\r\n" + b"x" * 65537 + b"\r\n0\r\n\r\n")
+                self.wfile.flush()
+            return
+        if mode == "truncated":
+            self.send_response(200)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", "100")
+            self.end_headers()
+            self.wfile.write(b"{")
+            self.wfile.flush()
+            self.close_connection = True
+            return
+        if mode == "slow":
+            time.sleep(0.2)
+        results = []
+        for index, email in enumerate(emails):
+            if "@" not in email or not email:
+                results.append({"index": index, "error": {"code": "invalid_email", "message": "private"}})
+            else:
+                results.append({"index": index, **self.result()})
+        checked = sum("error" not in item for item in results)
+        response = {"results": results, "checked": checked, "failed": len(emails) - checked}
+        if mode == "bulk-invalid-index":
+            response["results"][0]["index"] = 1
+        elif mode == "bulk-invalid-count":
+            response["checked"] += 1
+        elif mode == "bulk-invalid-error":
+            response["results"][0] = {"index": 0, "error": {"code": "private"}}
+            response["checked"] = checked - 1
+            response["failed"] += 1
+        elif mode == "padded":
+            response["padding"] = "x" * 20000
+        self.reply(200, response)
+
     def reply(self, status, value, extra=None):
         body = value if isinstance(value, bytes) else json.dumps(value, separators=(",", ":")).encode()
         headers = {"content-type": "application/json", "content-length": str(len(body)),
@@ -202,18 +279,25 @@ def serve():
         # Generate a real test root and a distinct localhost leaf. Modern rustls/
         # webpki correctly rejects a self-signed end-entity certificate presented
         # as its own trust anchor (CaUsedAsEndEntity).
+        # Do not inherit a machine's default req extensions: older Windows Git
+        # OpenSSL appends -addext instead of replacing duplicate CA constraints.
+        ca_config = directory_path / "ca.cnf"
+        ca_config.write_text(
+            "[req]\ndistinguished_name=dn\nx509_extensions=ca\nprompt=no\n"
+            "[dn]\nCN=IronDome SDK Test Root\n"
+            "[ca]\nbasicConstraints=critical,CA:TRUE,pathlen:0\n"
+            "keyUsage=critical,keyCertSign,cRLSign\nsubjectKeyIdentifier=hash\n"
+            "authorityKeyIdentifier=keyid:always\n", encoding="ascii")
         run("openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-sha256",
             "-keyout", str(ca_key), "-out", str(ca_cert), "-days", "1",
-            "-subj", "/CN=IronDome SDK Test Root",
-            "-addext", "basicConstraints=critical,CA:TRUE,pathlen:0",
-            "-addext", "keyUsage=critical,keyCertSign,cRLSign")
+            "-config", str(ca_config))
         run("openssl", "req", "-new", "-newkey", "rsa:2048", "-nodes", "-sha256",
-            "-keyout", str(key), "-out", str(request), "-subj", "/CN=localhost")
+            "-keyout", str(key), "-out", str(request), "-subj", "/CN=IronDome SDK Loopback Test")
         extensions.write_text(
             "basicConstraints=critical,CA:FALSE\n"
             "keyUsage=critical,digitalSignature,keyEncipherment\n"
             "extendedKeyUsage=serverAuth\n"
-            "subjectAltName=DNS:localhost\n"
+            "subjectAltName=IP:127.0.0.1\n"
             "subjectKeyIdentifier=hash\n"
             "authorityKeyIdentifier=keyid,issuer\n",
             encoding="ascii",
@@ -221,6 +305,8 @@ def serve():
         run("openssl", "x509", "-req", "-in", str(request), "-CA", str(ca_cert),
             "-CAkey", str(ca_key), "-CAcreateserial", "-out", str(cert),
             "-days", "1", "-sha256", "-extfile", str(extensions))
+        subprocess.run([openssl_executable(), "verify", "-CAfile", str(ca_cert), str(cert)],
+                       check=True, input=b"", stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         os.chmod(ca_key, 0o600)
         os.chmod(key, 0o600)
 
@@ -233,7 +319,7 @@ def serve():
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:
-            yield server, f"https://localhost:{server.server_port}", ca_cert
+            yield server, f"https://127.0.0.1:{server.server_port}", ca_cert
         finally:
             server.shutdown()
             server.server_close()

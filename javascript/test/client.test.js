@@ -7,7 +7,7 @@ import { once } from "node:events";
 import { request } from "node:https";
 import { fileURLToPath } from "node:url";
 import { IronDome as NodeClient } from "../src/node.js";
-import { IronDome, APIError, ValidationError, ConfigurationError, ProtocolError,
+import { IronDome, DEFAULT_BASE_URL, APIError, ValidationError, ConfigurationError, ProtocolError,
   TimeoutError, CancelledError, BusyError, ClosedError, TransportError } from "../src/index.js";
 
 let fixture, baseUrl, ca;
@@ -22,7 +22,9 @@ before(async () => {
   lines.close();
 });
 after(async () => { fixture.stdin.end(); await once(fixture, "exit"); });
-const options = () => ({ apiKey: "test-key", baseUrl, ca });
+// Functional pool assertions tolerate slow first TLS initialization; dedicated
+// deadline cases below still supply their short explicit budgets.
+const options = () => ({ apiKey: "test-key", baseUrl, ca, timeoutMs: 30000 });
 const valid = () => ({ provider: "custom", valid: true, disposable: false, reason: "not_listed" });
 const json = (value, init = {}) => new Response(JSON.stringify(value), {
   ...init, headers: { "content-type": "application/json", ...init.headers },
@@ -52,7 +54,7 @@ test("Node reuses a verified TLS socket across health and sequential checks", as
 });
 
 test("Node rejects untrusted certificates and hostname mismatches", async () => {
-  for (const opts of [{ ...options(), ca: undefined }, { ...options(), baseUrl: baseUrl.replace("localhost", "127.0.0.1") }]) {
+  for (const opts of [{ ...options(), ca: undefined }, { ...options(), baseUrl: baseUrl.replace("127.0.0.1", "localhost") }]) {
     const client = new NodeClient(opts);
     try { await assert.rejects(client.warmup(), TransportError); } finally { client.close(); }
   }
@@ -240,5 +242,26 @@ test("Fetch bulk rejects wrong indexes, counts, missing or ambiguous item fields
     const client = new IronDome({...options(),fetch:async()=>json({error:{code,message:"private"}},{status:429})});
     await assert.rejects(client.checkBulk(["a@example.com"]), error=>error instanceof APIError && error.code===code && !String(error).includes("private"));
     client.close();
+  }
+});
+
+test("unified production is the default for opaque free and paid keys without an extra request", async () => {
+  assert.equal(DEFAULT_BASE_URL, "https://api.irondome.dev");
+  for (const apiKey of ["dome_free_v1.synthetic", "dome_live_v1.synthetic"]) {
+    const seen = [];
+    const client = new IronDome({ apiKey, fetch: async (url, init) => {
+      seen.push({ url, method: init.method });
+      assert.equal(init.headers.authorization, `Bearer ${apiKey}`);
+      return json(valid());
+    } });
+    assert.equal(seen.length, 0);
+    await client.check("person@example.com");
+    assert.deepEqual(seen, [{ url: DEFAULT_BASE_URL + "/v1/check", method: "POST" }]);
+    client.close();
+  }
+});
+test("legacy free endpoints fail before network access in Fetch and Node clients", () => {
+  for (const baseUrl of ["https://free.irondome.dev", "https://FREE.IRONDOME.DEV./", "https://irondome-free.edgecompute.app"]) {
+    for (const Client of [IronDome, NodeClient]) assert.throws(() => new Client({ apiKey: "test", baseUrl }), ConfigurationError);
   }
 });

@@ -9,14 +9,16 @@ dist/
 build/
 Cargo.lock
 
+!rust/Cargo.lock
+*.tgz
+*.pem
+*.key
+*.crt
+
 .env
 .env.*
 !.env.example
 .dev.vars
 secrets/
-*.pem
-*.key
-*.crt
-*.tgz
 *.whl
 *.crate
