@@ -11,8 +11,7 @@ use tokio::sync::Semaphore;
 
 const MAX_RESPONSE_BYTES: usize = 16_384;
 const MAX_BULK_BYTES: usize = 65_536;
-/// Default unified production API origin. The upcoming unified API rollout is
-/// required before this endpoint accepts existing free-key credentials.
+/// Default unified production API origin for stable account credentials.
 pub const DEFAULT_BASE_URL: &str = "https://api.irondome.dev";
 const CODES: &[&str] = &[
     "empty_body",
@@ -382,7 +381,7 @@ fn validate_origin(value: &str) -> Result<reqwest::Url, Error> {
     if url.host_str().is_none()
         || url.port() == Some(0)
         || matches!(
-            url.host_str(),
+            url.host_str().map(|host| host.trim_end_matches('.')),
             Some("free.irondome.dev" | "irondome-free.edgecompute.app")
         )
     {
@@ -557,6 +556,8 @@ mod tests {
         for value in [
             "https://free.irondome.dev",
             "https://irondome-free.edgecompute.app",
+            "https://FREE.irondome.dev./",
+            "https://irondome-free.edgecompute.app./",
         ] {
             assert!(validate_origin(value).is_err());
         }
