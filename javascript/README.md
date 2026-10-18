@@ -138,7 +138,7 @@ retain an asyncio client across handlers that call `asyncio.run` separately.
 ## Deno
 
 ```js
-import { IronDome } from './vendor/irondome/src/deno.js';
+import { IronDome } from 'npm:@irondome-dev/sdk@0.2.0/deno';
 const client = new IronDome({
   apiKey: Deno.env.get('IRONDOME_API_KEY'),
 });
