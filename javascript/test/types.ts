@@ -15,3 +15,12 @@ client.checkBulk([123]);
 client.check(123);
 // @ts-expect-error Node uses its own Agent, not an injected Fetch adapter.
 new NodeClient({ baseUrl: "https://example.test", apiKey: "test", fetch });
+
+const unified = new IronDome({ apiKey: "test" });
+const unifiedNode = new NodeClient({ apiKey: "test" });
+unified.close(); unifiedNode.close();
+
+import { IronDome as DenoClient, DEFAULT_BASE_URL as denoOrigin } from "../src/deno.js";
+const unifiedDeno = new DenoClient({ apiKey: "test", caCerts: [] });
+const canonicalOrigin: "https://api.irondome.dev" = denoOrigin;
+void canonicalOrigin; unifiedDeno.close();

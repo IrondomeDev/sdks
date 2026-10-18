@@ -1,0 +1,3 @@
+include LICENSE README.md
+recursive-include irondome *.py py.typed
+prune tests

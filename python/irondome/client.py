@@ -17,7 +17,9 @@ from urllib.parse import urlsplit
 
 import httpx
 
+DEFAULT_BASE_URL = "https://api.irondome.dev"
 MAX_RESPONSE_BYTES = 16_384
+MAX_BULK_BYTES = 65_536
 Provider = Literal["gmail", "microsoft", "icloud", "proton", "yahoo", "custom"]
 Reason = Literal["blocked_email", "blocked_domain", "allowed_domain", "not_listed"]
 _PROVIDERS = frozenset(("gmail", "microsoft", "icloud", "proton", "yahoo", "custom"))
@@ -25,7 +27,7 @@ _REASONS = frozenset(("blocked_email", "blocked_domain", "allowed_domain", "not_
 _CODES = frozenset(("empty_body invalid_content_length invalid_body_length invalid_json "
     "authorization_required invalid_authorization invalid_api_key expired_api_key inactive_api_key "
     "revoked_api_key insufficient_scope not_found method_not_allowed content_length_required "
-    "body_too_large invalid_email internal_error service_unavailable").split())
+    "body_too_large invalid_email internal_error service_unavailable monthly_quota_exceeded empty_batch batch_too_large").split())
 
 
 class IronDomeError(Exception):
@@ -87,6 +89,28 @@ class HealthResult:
     detector_version: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class BulkItemError:
+    code: Literal["invalid_email"] = "invalid_email"
+    message: str = "Provide a syntactically valid email address."
+
+
+@dataclass(frozen=True, slots=True)
+class BulkItem:
+    index: int
+    result: CheckResult | None = None
+    error: BulkItemError | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class BulkResult:
+    results: tuple[BulkItem, ...]
+    checked: int
+    failed: int
+    request_id: str | None = None
+    detector_version: str | None = None
+
+
 def _positive(value: float, name: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (float, int)) or not math.isfinite(value) or value <= 0:
         raise ConfigurationError(f"{name} must be a positive finite number.")
@@ -104,13 +128,14 @@ def _origin(value: str) -> str:
     try:
         if isinstance(value, str) and re.fullmatch(r"https://[^/?#\\\s]+/?", value, re.IGNORECASE):
             parsed = urlsplit(value)
-            valid = bool(parsed.hostname) and parsed.username is None and parsed.password is None
+            valid = (bool(parsed.hostname) and parsed.username is None and parsed.password is None
+                     and parsed.hostname.rstrip(".") not in ("free.irondome.dev", "irondome-free.edgecompute.app"))
             if parsed.port is not None and not 1 <= parsed.port <= 65535:
                 valid = False
     except ValueError:
         valid = False
     if not valid:
-        raise ConfigurationError("base_url must be an HTTPS origin without credentials, path, query, or fragment.")
+        raise ConfigurationError("base_url must be a trusted HTTPS origin; legacy free endpoints are unsupported.")
     return value.rstrip("/")
 
 
@@ -133,6 +158,28 @@ def _metadata(value: str | None) -> str | None:
     return value if value and re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", value) else None
 
 
+def _bulk_body(emails: list[str] | tuple[str, ...]) -> bytes:
+    if not isinstance(emails, (list, tuple)) or not 1 <= len(emails) <= 100:
+        raise ValidationError("Provide between 1 and 100 email strings.")
+    chars = 0
+    for email in emails:
+        if not isinstance(email, str):
+            raise ValidationError("Bulk entries must be strings.")
+        chars += len(email)
+        if chars > MAX_BULK_BYTES:
+            raise ValidationError("Bulk request exceeds its input limit.")
+    body = None
+    try:
+        body = json.dumps({"emails": emails}, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    except UnicodeError:
+        pass
+    if body is None:
+        raise ValidationError("Emails must contain valid Unicode.")
+    if len(body) > MAX_BULK_BYTES:
+        raise ValidationError("Bulk request body exceeds 65536 bytes.")
+    return body
+
+
 def _retry_after(value: str | None) -> int | None:
     if not value or len(value) > 128:
         return None
@@ -147,7 +194,10 @@ def _retry_after(value: str | None) -> int | None:
         return None
 
 
-def _parse(status: int, headers: httpx.Headers, raw: bytes, health: bool) -> CheckResult | HealthResult:
+def _parse(status: int, headers: httpx.Headers, raw: bytes, health: bool,
+           bulk_count: int = 0) -> CheckResult | HealthResult | BulkResult:
+    if len(raw) > (MAX_BULK_BYTES if bulk_count else MAX_RESPONSE_BYTES):
+        raise ProtocolError("Response exceeds its byte limit.")
     request_id = _metadata(headers.get("x-request-id"))
     version = _metadata(headers.get("x-detector-base-version"))
     data: Any = None
@@ -168,6 +218,35 @@ def _parse(status: int, headers: httpx.Headers, raw: bytes, health: bool) -> Che
         if data.get("status") != "ok":
             raise ProtocolError("Invalid health response.")
         return HealthResult(request_id=request_id, detector_version=version)
+    if bulk_count:
+        items = data.get("results")
+        checked, failed = data.get("checked"), data.get("failed")
+        if (not isinstance(items, list) or len(items) != bulk_count or
+            type(checked) is not int or type(failed) is not int or
+            checked < 0 or failed < 0 or checked + failed != bulk_count):
+            raise ProtocolError("Invalid bulk response.")
+        results = []
+        successes = 0
+        for index, item in enumerate(items):
+            if not isinstance(item, dict) or type(item.get("index")) is not int or item["index"] != index:
+                raise ProtocolError("Invalid bulk result index.")
+            if "error" in item:
+                detail = item["error"]
+                if (not isinstance(detail, dict) or detail.get("code") != "invalid_email" or
+                    any(key in item for key in ("provider", "valid", "disposable", "reason"))):
+                    raise ProtocolError("Invalid bulk item error.")
+                results.append(BulkItem(index, error=BulkItemError()))
+            else:
+                results.append(BulkItem(index, result=_check_data(item)))
+                successes += 1
+        if successes != checked:
+            raise ProtocolError("Invalid bulk result counts.")
+        return BulkResult(tuple(results), checked, failed, request_id, version)
+    return _check_data(data, request_id, version)
+
+
+def _check_data(data: dict[str, Any], request_id: str | None = None,
+                version: str | None = None) -> CheckResult:
     provider, reason = data.get("provider"), data.get("reason")
     if (not isinstance(provider, str) or provider not in _PROVIDERS or
         not isinstance(reason, str) or reason not in _REASONS or data.get("valid") is not True or
@@ -177,10 +256,10 @@ def _parse(status: int, headers: httpx.Headers, raw: bytes, health: bool) -> Che
     return CheckResult(provider, True, data["disposable"], reason, request_id, version)
 
 
-def _check_headers(response: httpx.Response) -> None:
+def _check_headers(response: httpx.Response, limit: int = MAX_RESPONSE_BYTES) -> None:
     length = response.headers.get("content-length", "")
-    if re.fullmatch(r"[0-9]+", length) and (len(length) > 10 or int(length) > MAX_RESPONSE_BYTES):
-        raise ProtocolError("Response exceeds 16384 bytes.")
+    if re.fullmatch(r"[0-9]+", length) and (len(length) > 10 or int(length) > limit):
+        raise ProtocolError("Response exceeds its byte limit.")
     if response.headers.get("content-encoding", "identity").lower() != "identity":
         raise ProtocolError("Unexpected response content encoding.")
 
@@ -194,7 +273,7 @@ class _NoCookies(DefaultCookiePolicy):
 
 
 class _Base:
-    def __init__(self, api_key: str, *, base_url: str, timeout: float = 5.0,
+    def __init__(self, api_key: str, *, base_url: str = DEFAULT_BASE_URL, timeout: float = 5.0,
                  connect_timeout: float = 2.0, pool_timeout: float = 1.0,
                  max_connections: int = 32, max_keepalive_connections: int = 8,
                  keepalive_expiry: float = 20.0, max_in_flight: int = 64,
@@ -274,27 +353,34 @@ class Client(_Base):
         assert isinstance(result, HealthResult)
         return result
 
-    def _request(self, health: bool, body: bytes | None, timeout: float | None) -> CheckResult | HealthResult:
+    def check_bulk(self, emails: list[str] | tuple[str, ...], *, timeout: float | None = None) -> BulkResult:
+        result = self._request(False, _bulk_body(emails), timeout, len(emails))
+        assert isinstance(result, BulkResult)
+        return result
+
+    def _request(self, health: bool, body: bytes | None, timeout: float | None,
+                 bulk_count: int = 0) -> CheckResult | HealthResult | BulkResult:
         budget = self._timeout if timeout is None else _positive(timeout, "timeout")
+        limit = MAX_BULK_BYTES if bulk_count else MAX_RESPONSE_BYTES
         self._enter()
         failure = None
         try:
             deadline = time.monotonic() + budget
             try:
-                with self._http.stream("GET" if health else "POST", self._origin + ("/healthz" if health else "/v1/check"),
+                with self._http.stream("GET" if health else "POST", self._origin + ("/healthz" if health else "/v1/check/bulk" if bulk_count else "/v1/check"),
                     content=body, headers=self._headers(health), timeout=self._phase_timeout(budget)) as response:
-                    _check_headers(response)
+                    _check_headers(response, limit)
                     raw = bytearray()
                     # Do not request fixed-size chunks: each network read must reach the budget check.
                     for chunk in response.iter_raw():
                         if time.monotonic() >= deadline:
                             raise TimeoutError("Request budget exceeded.")
-                        if len(raw) + len(chunk) > MAX_RESPONSE_BYTES:
-                            raise ProtocolError("Response exceeds 16384 bytes.")
+                        if len(raw) + len(chunk) > limit:
+                            raise ProtocolError("Response exceeds its byte limit.")
                         raw.extend(chunk)
                     if time.monotonic() >= deadline:
                         raise TimeoutError("Request budget exceeded.")
-                    return _parse(response.status_code, response.headers, bytes(raw), health)
+                    return _parse(response.status_code, response.headers, bytes(raw), health, bulk_count)
             except httpx.TimeoutException:
                 failure = TimeoutError("Request phase timed out; delivery may be unknown.")
             except httpx.HTTPError:
@@ -333,22 +419,29 @@ class AsyncClient(_Base):
         assert isinstance(result, HealthResult)
         return result
 
-    async def _request(self, health: bool, body: bytes | None, timeout: float | None) -> CheckResult | HealthResult:
+    async def check_bulk(self, emails: list[str] | tuple[str, ...], *, timeout: float | None = None) -> BulkResult:
+        result = await self._request(False, _bulk_body(emails), timeout, len(emails))
+        assert isinstance(result, BulkResult)
+        return result
+
+    async def _request(self, health: bool, body: bytes | None, timeout: float | None,
+                       bulk_count: int = 0) -> CheckResult | HealthResult | BulkResult:
         budget = self._timeout if timeout is None else _positive(timeout, "timeout")
+        limit = MAX_BULK_BYTES if bulk_count else MAX_RESPONSE_BYTES
         self._enter()
         failure = None
         try:
             try:
                 async with asyncio.timeout(budget):
-                    async with self._http.stream("GET" if health else "POST", self._origin + ("/healthz" if health else "/v1/check"),
+                    async with self._http.stream("GET" if health else "POST", self._origin + ("/healthz" if health else "/v1/check/bulk" if bulk_count else "/v1/check"),
                         content=body, headers=self._headers(health), timeout=self._phase_timeout(budget)) as response:
-                        _check_headers(response)
+                        _check_headers(response, limit)
                         raw = bytearray()
                         async for chunk in response.aiter_raw():
-                            if len(raw) + len(chunk) > MAX_RESPONSE_BYTES:
-                                raise ProtocolError("Response exceeds 16384 bytes.")
+                            if len(raw) + len(chunk) > limit:
+                                raise ProtocolError("Response exceeds its byte limit.")
                             raw.extend(chunk)
-                        return _parse(response.status_code, response.headers, bytes(raw), health)
+                        return _parse(response.status_code, response.headers, bytes(raw), health, bulk_count)
             except (httpx.TimeoutException, asyncio.TimeoutError):
                 failure = TimeoutError("Request deadline exceeded; delivery may be unknown.")
             except httpx.HTTPError:

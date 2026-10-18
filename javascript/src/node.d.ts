@@ -1,5 +1,5 @@
 import type { ClientOptions, RequestOptions, CheckResult, HealthResult, BulkResult } from "./index.js";
-export { IronDomeError, APIError, ConfigurationError, ValidationError, ProtocolError,
+export { DEFAULT_BASE_URL, IronDomeError, APIError, ConfigurationError, ValidationError, ProtocolError,
   TransportError, TimeoutError, CancelledError, BusyError, ClosedError } from "./index.js";
 export interface NodeClientOptions extends Omit<ClientOptions, "fetch"> {
   maxSockets?: number;

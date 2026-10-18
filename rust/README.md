@@ -7,7 +7,7 @@
 An asynchronous client built on reqwest and rustls. Cloning `Client` shares the
 connection pool, immutable credentials, and concurrency admission limit. The SDK
 uses a separate Cargo workspace so native HTTP dependencies do not affect the
-Fastly Wasm application.
+other workspaces.
 
 ## Install
 
@@ -15,7 +15,7 @@ Add the SDK to a Tokio application:
 
 ```toml
 [dependencies]
-irondome-sdk = "0.1.0"
+irondome-sdk = "0.2.0"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -24,11 +24,7 @@ use irondome_sdk::{Client, Options};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let client = Client::new(
-        &std::env::var("IRONDOME_API_KEY")?,
-        &std::env::var("IRONDOME_BASE_URL")?,
-        Options::default(),
-    )?;
+    let client = Client::new(&std::env::var("IRONDOME_API_KEY")?, Options::default())?;
     let result = client.check("person@example.com").await?;
     println!("disposable={} reason={:?}", result.disposable, result.reason);
     Ok(())
@@ -42,10 +38,12 @@ blocking Rust wrapper and this native client is not a Fastly/Wasm runtime adapte
 
 ## Endpoints and bulk checks
 
-Use `https://free.irondome.dev` with a free key or `https://api.irondome.dev`
-with a paid key. Change both the endpoint and key when switching plans.
-The free plan includes 500 checks per month. Each syntactically valid email
-in a bulk request counts as one check.
+`Options::default()` targets `https://api.irondome.dev` for the stable account-key API contract. The stable account-key backend is active in production as of 18 October 2026. One account key remains valid across plan changes; the server applies the current plan. Free accounts share 500 checks per organization per month, while paid accounts bypass that quota.
+Do not configure the retired free origins (`free.irondome.dev` or
+`irondome-free.edgecompute.app`). For trusted staging or local TLS tests, set
+`Options { base_url: "https://staging.example".into(), ..Options::default() }`.
+Each syntactically valid email in a bulk request counts as one check under the
+unified API contract.
 
 `client.check_bulk(&["person@example.com", "invalid"]).await?` accepts 1?100
 strings. Results preserve input order as `BulkOutcome::Checked` or
@@ -73,6 +71,7 @@ Pass `Options { field: value, ..Options::default() }`.
 
 | Field | Default | Meaning |
 | --- | --- | --- |
+| `base_url` | `https://api.irondome.dev` | Trusted unified API origin; old free origins are rejected |
 | `timeout` | 5 seconds | Total request deadline through response-body completion |
 | `connect_timeout` | 2 seconds | Connection establishment cap |
 | `idle_timeout` | 20 seconds | Idle connection expiry policy |
@@ -140,7 +139,7 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt --all -- --check
 ```
 
-Integration tests use the shared Python localhost TLS fixture with a generated
+Integration tests use the shared Python loopback TLS fixture with a generated
 trusted certificate. They cover reuse across clones, trust/hostname failures,
 redirect/no-replay behavior, body/schema limits, deadlines, and dropped-future
 cancellation. Tests require Python 3 and OpenSSL as well as Rust. No production

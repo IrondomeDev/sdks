@@ -1,6 +1,7 @@
+export declare const DEFAULT_BASE_URL: "https://api.irondome.dev";
 export interface ClientOptions {
-  /** A trusted HTTPS origin. Never derive it from incoming user input. */
-  baseUrl: string;
+  /** Defaults to api.irondome.dev. Override only for trusted staging/test origins. */
+  baseUrl?: string;
   apiKey: string;
   /** End-to-end deadline including pool wait and response body. Default: 5000. */
   timeoutMs?: number;

@@ -1,3 +1,4 @@
+export const DEFAULT_BASE_URL = "https://api.irondome.dev";
 const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { fatal: true });
 export const MAX_RESPONSE_BYTES = 16 * 1024;
@@ -43,9 +44,10 @@ function origin(value) {
     const url = new URL(value);
     if (url.protocol !== "https:" || !url.hostname || url.port === "0" || url.username || url.password ||
         value.includes("@") || url.pathname !== "/") throw new Error();
+    if (["free.irondome.dev", "irondome-free.edgecompute.app"].includes(url.hostname.replace(/\.$/, ""))) throw new Error();
     return url.origin;
   } catch {
-    throw new ConfigurationError("baseUrl must be an HTTPS origin without credentials, path, query, or fragment.");
+    throw new ConfigurationError("baseUrl must be a trusted HTTPS origin; legacy free endpoints are unsupported.");
   }
 }
 
@@ -129,7 +131,7 @@ export class BaseClient {
   #origin; #authorization; #send; #dispose; #timeout; #maxInFlight;
   #active = new Set(); #closed = false;
   constructor(options, send, dispose = () => {}) {
-    this.#origin = origin(options.baseUrl);
+    this.#origin = origin(options.baseUrl === undefined ? DEFAULT_BASE_URL : options.baseUrl);
     if (typeof options.apiKey !== "string" || !/^[\x21-\x7e]{1,4096}$/.test(options.apiKey)) {
       throw new ConfigurationError("apiKey must contain 1 to 4096 printable ASCII characters without spaces.");
     }

@@ -12,22 +12,21 @@ an HTTPS connection pool; the Deno adapter owns a native HTTP client.
 ## Install
 
 ```sh
-npm install @irondome-dev/sdk@0.1.0
+npm install @irondome-dev/sdk@0.2.0
 ```
 
 Node.js 22 or newer is required for the Node adapter. TypeScript declarations ship
-with every entry point. Deno can import source by a relative path after vendoring
-this directory. Do not embed credentials in module URLs or import private GitHub
-source using an API key. Production releases should use reviewed, pinned packages.
+with every entry point. Deno can import `npm:@irondome-dev/sdk@0.2.0/deno`. Keep credentials on the server.
 
 ## Endpoints and bulk checks
 
-Use `https://free.irondome.dev` with a free key or `https://api.irondome.dev`
-with a paid key. Change both the endpoint and key when switching plans.
-The free plan includes 500 checks per month; each syntactically valid email
+This SDK targets `https://api.irondome.dev` for one account key across plans;
+the stable account-key backend is active in production as of 18 October 2026. The server applies the
+current plan without changing the key or API origin. Free accounts share 500
+checks per organization per month; each syntactically valid email
 in a bulk request counts as one check.
 
-`check(email)` sends one email. `checkBulk(emails)` accepts 1?100 strings,
+`check(email)` sends one email. `checkBulk(emails)` accepts 1-100 strings,
 returns ordered results, and preserves invalid-email errors per item.
 Request bodies are limited to 1,024 bytes for single checks and 65,536 bytes
 for bulk checks. Neither operation retries automatically.
@@ -47,7 +46,6 @@ import { IronDome, APIError } from '@irondome-dev/sdk/node';
 
 const client = new IronDome({
   apiKey: process.env.IRONDOME_API_KEY,
-  baseUrl: process.env.IRONDOME_BASE_URL,
   timeoutMs: 5000,
 });
 
@@ -98,7 +96,7 @@ round trip on the critical path can make the first operation slower.
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `apiKey` | required | Opaque server credential; printable ASCII without whitespace |
-| `baseUrl` | required | Trusted HTTPS origin, optional trailing slash only |
+| `baseUrl` | `https://api.irondome.dev` | Trusted HTTPS origin, optional trailing slash only |
 | `timeoutMs` | 5000 | Request deadline, including pool wait and body read |
 | `maxInFlight` | 64 | Admission limit; excess calls fail with `BusyError` |
 | `maxSockets` | 32 | Node-only total/per-origin connection ceiling |
@@ -143,7 +141,6 @@ retain an asyncio client across handlers that call `asyncio.run` separately.
 import { IronDome } from './vendor/irondome/src/deno.js';
 const client = new IronDome({
   apiKey: Deno.env.get('IRONDOME_API_KEY'),
-  baseUrl: Deno.env.get('IRONDOME_BASE_URL'),
 });
 try {
   const result = await client.check('person@example.com');
@@ -153,8 +150,8 @@ try {
 }
 ```
 
-Grant only the necessary `--allow-env=IRONDOME_API_KEY,IRONDOME_BASE_URL` and
-`--allow-net=your-assigned-api-host` permissions. The dedicated Deno client negotiates
+Grant only the necessary `--allow-env=IRONDOME_API_KEY` and
+`--allow-net=api.irondome.dev` permissions. The dedicated Deno client negotiates
 HTTP/1.1 or HTTP/2, retains idle connections, and closes owned resources explicitly.
 It requires `Deno.createHttpClient`; the portable entry is the fallback where that
 API is unavailable. Native Fetch/Deno still controls DNS and TLS implementation.[3]
@@ -162,8 +159,7 @@ API is unavailable. Native Fetch/Deno still controls DNS and TLS implementation.
 ## Supabase Edge Functions
 
 Use the portable `src/index.js` entry, vendored with its sibling `core.js`, inside
-the existing authorized function flow. Read `IRONDOME_API_KEY` and the origin from
-Supabase secrets. Do not assume all Deno native socket APIs are exposed by the
+the existing authorized function flow. Read `IRONDOME_API_KEY` from Supabase secrets; the origin defaults to the unified API. Do not assume all Deno native socket APIs are exposed by the
 hosted runtime. The Fetch implementation owns pooling, negotiation, and teardown.
 An SDK object is cheap and performs no I/O during construction. Platform cold starts
 and instance replacement remain outside SDK control.[4]
@@ -211,8 +207,9 @@ not a security sandbox: it must honor HTTPS, abort, redirect, and credential opt
 
 Safe exception messages cannot prevent third-party tracing agents from capturing
 arguments or headers. Disable body/header tracing and redact local variables at
-the application boundary. Changing keys requires a new client; do not mutate a
-shared credential for concurrent tenants.
+the application boundary. A plan change keeps the same key and client. When the
+credential itself is replaced, create a new client; do not mutate a shared
+credential for concurrent tenants.
 
 ## Test and release
 

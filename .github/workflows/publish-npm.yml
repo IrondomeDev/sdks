@@ -1,0 +1,61 @@
+name: Publish npm SDK
+on:
+  push:
+    tags: ['javascript/v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing release tag, for example javascript/v0.2.0'
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: publish-npm
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '24'
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.13'
+      - run: node scripts/check-release.mjs javascript
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+      - run: mkdir -p ../release && npm ci --ignore-scripts && npm test && npm run typecheck && npm pack --ignore-scripts --pack-destination ../release
+        working-directory: javascript
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: npm-sdk
+          path: release/*.tgz
+          if-no-files-found: error
+  publish:
+    if: vars.NPM_RELEASE_ENABLED == 'true'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: npm-sdk
+          path: release
+      - run: npm publish release/*.tgz --access public --provenance --ignore-scripts

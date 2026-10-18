@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { IronDome, APIError, ProtocolError, TimeoutError, TransportError } from "../src/deno.js";
 
 function assert(value, message = "assertion failed") { if (!value) throw new Error(message); }
@@ -6,8 +7,8 @@ async function rejects(operation, Type) {
   throw new Error("expected rejection");
 }
 Deno.test("Deno native pool: verified TLS reuse, fixed length, no replay, deadlines", async () => {
-  const child = new Deno.Command("python3", {
-    args: [new URL("../../testing/server.py", import.meta.url).pathname],
+  const child = new Deno.Command(Deno.build.os === "windows" ? "python" : "python3", {
+    args: [fileURLToPath(new URL("../../testing/server.py", import.meta.url))],
     stdin: "piped", stdout: "piped", stderr: "inherit",
   }).spawn();
   let client;
@@ -39,16 +40,23 @@ Deno.test("Deno native pool: verified TLS reuse, fixed length, no replay, deadli
     assert(error.retryAfterSeconds === 5 && error.code === "service_unavailable");
     await rejects(() => client.check("redirect@example.com"), APIError);
     await rejects(() => client.check("oversized@example.com"), ProtocolError);
+    // Cancellation may close the reused socket; a deadline can expire during
+    // a fresh TLS handshake before the next POST reaches the server.
+    const audit = Deno.createHttpClient({ caCerts: [ca] });
+    try {
+      const before = await (await fetch(fixture.url + "/_stats", { client: audit })).json();
+      assert(before.checks_seen === 7, `completed POST was replayed: ${before.checks_seen}`);
+    } finally { audit.close(); }
     await rejects(() => client.check("slow-body@example.com", { timeoutMs: 30 }), TimeoutError);
     const untrusted = new IronDome({ apiKey: "test-key", baseUrl: fixture.url });
     try { await rejects(() => untrusted.warmup(), TransportError); } finally { untrusted.close(); }
-    const wrongHost = new IronDome({ apiKey: "test-key", baseUrl: fixture.url.replace("localhost", "127.0.0.1"), caCerts: [ca] });
+    const wrongHost = new IronDome({ apiKey: "test-key", baseUrl: fixture.url.replace("127.0.0.1", "localhost"), caCerts: [ca] });
     try { await rejects(() => wrongHost.warmup(), TransportError); } finally { wrongHost.close(); }
     const raw = Deno.createHttpClient({ caCerts: [ca] });
     try {
       const response = await fetch(fixture.url + "/_stats", { client: raw });
       const stats = await response.json();
-      assert(stats.checks_seen === 8, "billable POST was replayed");
+      assert(stats.checks_seen >= 7 && stats.checks_seen <= 8, `timed-out POST was replayed: ${stats.checks_seen}`);
       assert(stats.health_authorized === false);
     } finally { raw.close(); }
   } finally {

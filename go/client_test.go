@@ -137,7 +137,7 @@ func fixture(t *testing.T, h2 bool) (*Client, *atomic.Int64, *atomic.Int64, *ato
 	t.Cleanup(server.Close)
 	roots := x509.NewCertPool()
 	roots.AddCert(server.Certificate())
-	client, err := New("test-key", server.URL, Options{RootCAs: roots, HTTP1Only: !h2})
+	client, err := New("test-key", Options{BaseURL: server.URL, RootCAs: roots, HTTP1Only: !h2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -249,14 +249,14 @@ func TestTLSAndEnvironment(t *testing.T) {
 	if _, err := c.Warmup(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	untrusted, err := New("test-key", c.origin, Options{})
+	untrusted, err := New("test-key", Options{BaseURL: c.origin})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer untrusted.Close()
 	_, err = untrusted.Warmup(context.Background())
 	errorKind(t, err, Transport)
-	wrongHost, err := New("test-key", c.origin, Options{RootCAs: c.transport.TLSClientConfig.RootCAs})
+	wrongHost, err := New("test-key", Options{BaseURL: c.origin, RootCAs: c.transport.TLSClientConfig.RootCAs})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -271,11 +271,11 @@ func TestTLSAndEnvironment(t *testing.T) {
 }
 func TestValidation(t *testing.T) {
 	for _, origin := range []string{"http://localhost", "https://host/x", "https://host/x/..", "https://user:pass@host", "https://host?x", "https://host#x", "https://host:0", "https://host:65536", " https://host", "https://host\\evil"} {
-		_, err := New("test-key", origin, Options{})
+		_, err := New("test-key", Options{BaseURL: origin})
 		errorKind(t, err, Configuration)
 	}
 	for _, key := range []string{"", "x\r\ny", "x y", "é", strings.Repeat("x", 4097)} {
-		_, err := New(key, "https://example.com", Options{})
+		_, err := New(key, Options{BaseURL: "https://example.com"})
 		errorKind(t, err, Configuration)
 	}
 	for _, email := range []string{strings.Repeat("a", 1013), "\xff", strings.Repeat("é", 507)} {
@@ -286,7 +286,7 @@ func TestValidation(t *testing.T) {
 		t.Fatal("byte boundary")
 	}
 	for _, options := range []Options{{Timeout: -1}, {MaxConnections: -1}, {MaxInFlight: 65537}, {MaxConnections: 1, MaxIdleConnections: 2}} {
-		_, err := New("test-key", "https://example.com", options)
+		_, err := New("test-key", options)
 		errorKind(t, err, Configuration)
 	}
 }
@@ -387,4 +387,21 @@ func TestBulkNoReplayAndDeadline(t *testing.T) {
 	stop()
 	_, err = c.CheckBulk(canceled, []string{"a@example.com"})
 	errorKind(t, err, Canceled)
+}
+
+func TestUnifiedProductionDefault(t *testing.T) {
+	for _, key := range []string{"dome_free_v1.synthetic", "dome_live_v1.synthetic"} {
+		client, err := New(key, Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if client.origin != DefaultBaseURL || client.authorization != "Bearer "+key {
+			t.Fatal("unified default or opaque credential changed")
+		}
+		client.Close()
+	}
+	for _, origin := range []string{"https://free.irondome.dev", "https://FREE.IRONDOME.DEV./", "https://irondome-free.edgecompute.app"} {
+		_, err := New("test-key", Options{BaseURL: origin})
+		errorKind(t, err, Configuration)
+	}
 }

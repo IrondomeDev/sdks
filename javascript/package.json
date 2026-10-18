@@ -1,6 +1,6 @@
 {
   "name": "@irondome-dev/sdk",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Server-side IronDome API clients with reusable secure transports",
   "type": "module",
   "license": "MIT",
@@ -43,7 +43,6 @@
     "url": "https://github.com/IrondomeDev/sdks/issues"
   },
   "publishConfig": {
-    "access": "public",
-    "registry": "https://registry.npmjs.org"
+    "access": "public"
   }
 }

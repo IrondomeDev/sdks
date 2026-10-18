@@ -22,6 +22,9 @@ import (
 	"unicode/utf8"
 )
 
+// DefaultBaseURL is the unified origin for both free and paid credentials.
+const DefaultBaseURL = "https://api.irondome.dev"
+
 const maxResponseBytes = 16384
 const maxBulkBytes = 65536
 
@@ -69,6 +72,8 @@ func (e *Error) Unwrap() error {
 // Options configures a client. Zero values select defaults. RootCAs replaces the
 // system trust roots when non-nil and is cloned at construction.
 type Options struct {
+	// BaseURL overrides the production origin for trusted staging or local TLS tests.
+	BaseURL            string
 	Timeout            time.Duration
 	ConnectTimeout     time.Duration
 	IdleTimeout        time.Duration
@@ -121,10 +126,17 @@ var metadataPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
 var digitsPattern = regexp.MustCompile(`^[0-9]+$`)
 var errorCodes = strings.Fields("empty_body invalid_content_length invalid_body_length invalid_json authorization_required invalid_authorization invalid_api_key expired_api_key inactive_api_key revoked_api_key insufficient_scope not_found method_not_allowed content_length_required body_too_large invalid_email internal_error service_unavailable monthly_quota_exceeded empty_batch batch_too_large")
 
-// New creates a client without network I/O. baseURL must be a trusted HTTPS origin.
-func New(apiKey, baseURL string, options Options) (*Client, error) {
+// New creates a client without network I/O, defaulting to the unified production origin.
+func New(apiKey string, options Options) (*Client, error) {
+	baseURL := options.BaseURL
+	if baseURL == "" {
+		baseURL = DefaultBaseURL
+	}
 	u, err := url.Parse(baseURL)
 	if err != nil || !originPattern.MatchString(baseURL) || u.Hostname() == "" || u.User != nil || strings.Contains(baseURL, "@") {
+		return nil, &Error{Kind: Configuration}
+	}
+	if host := strings.ToLower(strings.TrimSuffix(u.Hostname(), ".")); host == "free.irondome.dev" || host == "irondome-free.edgecompute.app" {
 		return nil, &Error{Kind: Configuration}
 	}
 	if p := u.Port(); p != "" {

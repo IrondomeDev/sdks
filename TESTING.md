@@ -1,4 +1,6 @@
-# SDK verification and measurement
+# Unified SDK validation
+
+These SDKs target the stable account-key contract at `https://api.irondome.dev`; the stable account-key backend is active in production as of 18 October 2026. Tests use local TLS fixtures and synthetic credentials; no D1, production usage or payment calls are required. Current local validation is recorded in `VALIDATION.md`; the historical record below describes earlier runs and is not a claim about current hosted CI.
 
 ## Reproducible tests
 
@@ -6,7 +8,7 @@ Run from each language directory:
 
 ```sh
 # javascript
-npm install --ignore-scripts
+npm ci --ignore-scripts --no-audit --no-fund
 npm test
 npm run typecheck
 deno test --allow-run=python3 --allow-read --allow-net=localhost,127.0.0.1 test/deno.test.js
@@ -26,8 +28,10 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt --all -- --check
 ```
 
+On Windows, use `--allow-run=python` in the Deno command; Unix runners use `python3`.
+
 Node, Python, Rust, and Deno tests start `testing/server.py` on loopback. It creates
-an ephemeral localhost certificate/private key using OpenSSL and removes the files
+an ephemeral loopback-IP certificate/private key using OpenSSL and removes the files
 at shutdown. Clients explicitly trust the certificate while preserving hostname
 verification. A mismatched host and an untrusted certificate must fail. Private
 fixture keys never enter Git. Go uses equivalent `httptest` TLS servers, including
@@ -41,7 +45,7 @@ body bounds, timeout during headers/body/pool wait, cancellation, concurrency,
 closed-client behavior, environment-proxy isolation where owned, and cookie isolation.
 Not every runtime supports every assertion; review the individual test files.
 
-## Local verification record
+## Historical verification record
 
 The authoring environment ran Node 22.16.0, TypeScript 5.8.3, Python 3.13.5, and
 Go 1.23.2. The initial suites passed: Node 9 test groups plus type checking, Python
@@ -83,8 +87,7 @@ cannot satisfy arbitrary parallel demand without queueing or new connections.
 For HTTP/2, record concurrent streams as well as physical connections.
 
 For production acceptance, use a controlled credential with a strict request cap.
-The owner authorizes tests below 100,000 requests; keep Cloudflare operations
-within the applicable free daily limits. Each successful check may be billable; the API has no
+Do not run production load tests while D1 writes are exhausted. Keep any later authorized smoke run explicitly small and bounded. Each successful check may be billable; the API has no
 server-backed logical-request idempotency key. Never perform sustained load tests
 or speculative duplicate checks as part of normal CI. Keep submitted addresses and
 credentials out of traces. Coordinate any high-volume Fastly test separately.

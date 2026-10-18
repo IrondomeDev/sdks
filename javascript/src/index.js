@@ -1,5 +1,5 @@
 import { BaseClient, MAX_RESPONSE_BYTES, ProtocolError, ConfigurationError } from "./core.js";
-export { IronDomeError, APIError, ConfigurationError, ValidationError, ProtocolError,
+export { DEFAULT_BASE_URL, IronDomeError, APIError, ConfigurationError, ValidationError, ProtocolError,
   TransportError, TimeoutError, CancelledError, BusyError, ClosedError } from "./core.js";
 
 // Native fetch owns DNS, TLS, protocol negotiation, and connection reuse on edge runtimes.
