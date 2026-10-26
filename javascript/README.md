@@ -158,6 +158,8 @@ API is unavailable. Native Fetch/Deno still controls DNS and TLS implementation.
 
 ## Supabase Edge Functions
 
+For Supabase Auth signup screening, use the native [Before User Created hook guide](https://irondome.dev/docs/guides/supabase); no customer-hosted Edge Function is required. The SDK guidance below is for checks inside an existing Edge Function, not the native Auth hook.
+
 Use the portable `src/index.js` entry, vendored with its sibling `core.js`, inside
 the existing authorized function flow. Read `IRONDOME_API_KEY` from Supabase secrets; the origin defaults to the unified API. Do not assume all Deno native socket APIs are exposed by the
 hosted runtime. The Fetch implementation owns pooling, negotiation, and teardown.

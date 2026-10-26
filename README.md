@@ -11,6 +11,8 @@ Use one opaque `dome_acct_v1.` account key across plan changes. The server appli
 | Go 1.23+ | `go get github.com/IrondomeDev/sdks/go@v0.2.0` | [Go](go/README.md) |
 | Rust | `cargo add irondome-sdk@0.2.0` | [Rust](rust/README.md) |
 
+For Supabase Auth signup screening, use the native [Before User Created hook guide](https://irondome.dev/docs/guides/supabase). It rejects disposable-email signups before user creation without a customer-hosted Edge Function or an SDK call in your signup client.
+
 ```js
 import { IronDome } from '@irondome-dev/sdk/node';
 const client = new IronDome({ apiKey: process.env.IRONDOME_API_KEY });
